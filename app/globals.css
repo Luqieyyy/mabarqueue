@@ -1,0 +1,56 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  /* Custom scrollbar — light theme */
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: #c7d2fe #f1f5f9;
+  }
+  *::-webkit-scrollbar {
+    width: 5px;
+    height: 5px;
+  }
+  *::-webkit-scrollbar-track {
+    background: #f1f5f9;
+  }
+  *::-webkit-scrollbar-thumb {
+    background: #a5b4fc;
+    border-radius: 3px;
+  }
+}
+
+/* ── Animations ──────────────────────────────────────── */
+
+@keyframes fadeSlideIn {
+  from { opacity: 0; transform: translateY(-6px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes pulseGlow {
+  0%, 100% { box-shadow: 0 0 12px rgba(16, 185, 129, 0.25); }
+  50%       { box-shadow: 0 0 28px rgba(16, 185, 129, 0.5), 0 0 50px rgba(16, 185, 129, 0.15); }
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+.animate-fade-slide-in {
+  animation: fadeSlideIn 0.22s ease-out;
+}
+
+.animate-pulse-glow {
+  animation: pulseGlow 2.5s ease-in-out infinite;
+}
+
+/* ── Glow utilities ──────────────────────────────────── */
+
+.glow-green {
+  box-shadow: 0 0 16px rgba(16, 185, 129, 0.3);
+}
+
+.glow-indigo {
+  box-shadow: 0 0 20px rgba(99, 102, 241, 0.25);
+}
