@@ -2,7 +2,7 @@ import type { Metadata } from 'next';
 import './globals.css';
 
 export const metadata: Metadata = {
-  title: 'SynoQueue – Stream Queue Manager',
+  title: 'MabarQueue – Stream Queue Manager',
   description: 'Real-time viewer game queue management for livestreamers',
 };
 

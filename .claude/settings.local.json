@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(npm install framer-motion --legacy-peer-deps)",
+      "Bash(npm install)",
+      "Bash(npm install --save-dev @types/react @types/react-dom @types/node)"
+    ]
+  }
+}

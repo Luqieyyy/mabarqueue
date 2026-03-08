@@ -38,9 +38,9 @@ export default function LoginPage() {
         {/* Logo */}
         <div className="text-center mb-8">
           <div className="inline-flex items-center justify-center w-12 h-12 bg-violet-600 rounded-2xl text-xl font-black mb-4 glow-violet">
-            S
+            M
           </div>
-          <h1 className="text-2xl font-black text-white">SynoQueue</h1>
+          <h1 className="text-2xl font-black text-white">MabarQueue</h1>
           <p className="text-gray-500 text-sm mt-1">Streamer Dashboard Login</p>
         </div>
 

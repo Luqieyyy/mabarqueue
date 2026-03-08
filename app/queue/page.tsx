@@ -45,9 +45,9 @@ export default function QueuePage() {
       <nav className="h-14 border-b border-gray-200 bg-white shadow-sm flex items-center justify-between px-4 sticky top-0 z-10">
         <div className="flex items-center gap-2">
           <div className="w-7 h-7 bg-indigo-600 rounded-lg flex items-center justify-center text-xs font-black text-white">
-            S
+            M
           </div>
-          <span className="font-bold text-sm text-gray-900">SynoQueue</span>
+          <span className="font-bold text-sm text-gray-900">MabarQueue</span>
         </div>
         <span className="inline-flex items-center gap-1.5 text-xs text-gray-500 font-medium">
           <span className="w-1.5 h-1.5 bg-emerald-500 rounded-full animate-pulse" />
@@ -57,7 +57,7 @@ export default function QueuePage() {
 
       <main className="max-w-lg mx-auto px-4 py-8">
         <div className="text-center mb-8">
-          <h1 className="text-2xl font-black text-gray-900">Syno Mabar Queue</h1>
+          <h1 className="text-2xl font-black text-gray-900">Mabar Queue</h1>
           <p className="text-gray-500 text-sm mt-1">Updates in real-time</p>
         </div>
 

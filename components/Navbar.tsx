@@ -22,9 +22,9 @@ export default function Navbar({ userName, onSettings }: Props) {
     <nav className="h-14 bg-white border-b border-gray-200 flex items-center justify-between px-5 sticky top-0 z-30 shadow-sm">
       <div className="flex items-center gap-3">
         <div className="w-7 h-7 bg-indigo-600 rounded-lg flex items-center justify-center text-xs font-black text-white glow-indigo">
-          S
+          M
         </div>
-        <span className="font-bold text-gray-900 text-sm">SynoQueue</span>
+        <span className="font-bold text-gray-900 text-sm">MabarQueue</span>
         {userName && (
           <>
             <span className="text-gray-300 text-sm">·</span>
