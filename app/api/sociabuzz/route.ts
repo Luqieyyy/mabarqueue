@@ -1,8 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { addDoc, collection, doc, getDoc, serverTimestamp } from 'firebase/firestore';
-import { extractIGN, convertDonationToGames } from '../../../lib/donation';
+import { extractIGN } from '../../../lib/donation';
 import { addPlayerToQueue, formatOrderDate } from '../../../lib/queue';
 import { db } from '../../../lib/firebase';
+import { getRates, getFeatures, convertAmountToGames } from '../../../lib/settings';
 
 // ─── Content-Type Parser ──────────────────────────────────────────────────────
 
@@ -134,6 +135,11 @@ function extractDonation(body: Record<string, unknown>): ParsedDonation | null {
  *   curl -X POST https://xxxx.ngrok-free.app/api/sociabuzz \
  *     -d "donor_name=Ali123&amount=10&message=IGN%3A+AliPro"
  */
+// Sociabuzz sends GET to verify the endpoint is reachable before sending POST
+export async function GET() {
+  return NextResponse.json({ status: 'ok', service: 'MabarQueue webhook' });
+}
+
 export async function POST(req: NextRequest) {
   const timestamp = new Date().toISOString();
 
@@ -185,7 +191,34 @@ export async function POST(req: NextRequest) {
     const { donorName, amount, message } = donation;
     console.log(`[Sociabuzz] Extracted → donorName: "${donorName}", amount: ${amount}, message: "${message}"`);
 
-    // ── 5. Extract IGN ──
+    // ── 5. Load settings (rates + features) ──
+    const [rates, featureSettings] = await Promise.all([getRates(), getFeatures()]);
+
+    // ── 6. Detect Comment Album (if feature is ON) ──
+    const albumMatch = featureSettings.commentAlbum
+      ? message.match(/^ALBUM:\s*(\d+)\s+(.+)/i)
+      : null;
+
+    if (albumMatch) {
+      const gameId = albumMatch[1].trim();
+      const albumIgn = albumMatch[2].trim();
+      console.log(`[Sociabuzz] → Comment Album detected | GameID: "${gameId}" | IGN: "${albumIgn}"`);
+
+      await addDoc(collection(db, 'comment_album'), {
+        donorName,
+        gameId,
+        ign: albumIgn,
+        amount,
+        message,
+        timestamp: serverTimestamp(),
+      });
+
+      console.log(`[Sociabuzz] ✓ Album comment from ${donorName} saved`);
+      console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n');
+      return NextResponse.json({ success: true, type: 'comment_album', donorName, gameId, ign: albumIgn });
+    }
+
+    // ── 7. Normal mabar flow — extract IGN ──
     const ign = extractIGN(message);
     if (!ign) {
       console.warn(`[Sociabuzz] ✗ No IGN found in message: "${message}"`);
@@ -195,19 +228,19 @@ export async function POST(req: NextRequest) {
       });
     }
 
-    // ── 6. Convert amount to games ──
-    const games = convertDonationToGames(amount);
+    // ── 8. Convert amount to games using saved rates ──
+    const games = convertAmountToGames(amount, rates);
     if (games === 0) {
-      console.warn(`[Sociabuzz] ✗ Amount RM${amount} below minimum tier (RM4)`);
+      console.warn(`[Sociabuzz] ✗ Amount RM${amount} below minimum tier`);
       return NextResponse.json({
         success: true,
-        warning: `RM${amount} is below minimum donation tier (RM4 = 1 game)`,
+        warning: `RM${amount} is below minimum donation tier`,
       });
     }
 
     console.log(`[Sociabuzz] → IGN: "${ign}" | Games: ${games} | Amount: RM${amount}`);
 
-    // ── 7. Add to queue + log donation ──
+    // ── 9. Add to queue + log donation ──
     await Promise.all([
       addPlayerToQueue(donorName, ign, games, formatOrderDate()),
       addDoc(collection(db, 'donations'), {
