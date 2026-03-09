@@ -49,7 +49,14 @@ export default function CurrentPlayerPanel({
             {/* Top row: IGN + adjust */}
             <div className="flex items-center gap-2">
               <div className="flex-1 min-w-0">
-                <p className="font-bold text-gray-900 text-sm truncate">{player.ign}</p>
+                <div className="flex items-center gap-1.5 flex-wrap">
+                  <p className="font-bold text-gray-900 text-sm truncate">{player.ign}</p>
+                  {player.player_id && (
+                    <span className="text-[10px] font-mono text-gray-400 bg-gray-100 px-1.5 py-0.5 rounded shrink-0">
+                      {player.player_id}
+                    </span>
+                  )}
+                </div>
                 <p className="text-xs text-emerald-600 font-medium">
                   {player.gamesLeft} game{player.gamesLeft !== 1 ? 's' : ''} left
                   {player.orderDate && (
