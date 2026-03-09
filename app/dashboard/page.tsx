@@ -36,7 +36,7 @@ import CommentAlbumFeed, { type AlbumEntry } from '../../components/CommentAlbum
 
 export default function DashboardPage() {
   const router = useRouter();
-  const { user, loading: authLoading } = useAuth();
+  const { user, username, loading: authLoading } = useAuth();
 
   const [currentPlayers, setCurrentPlayers] = useState<GamePlayer[]>([]);
   const [waitingPlayers, setWaitingPlayers] = useState<GamePlayer[]>([]);
@@ -49,28 +49,41 @@ export default function DashboardPage() {
   const [debugJson, setDebugJson] = useState('{\n  "id": "test-001",\n  "amount": 1,\n  "supporter": "TestDonor",\n  "message": "43149159 Luqieyyy",\n  "level": { "title": "PACKAGE MABAR 1 GAME" }\n}');
   const [debugResponse, setDebugResponse] = useState('');
   const [debugLoading, setDebugLoading] = useState(false);
+  const [firestoreError, setFirestoreError] = useState('');
 
   useEffect(() => {
     if (!authLoading && !user) router.push('/login');
   }, [user, authLoading, router]);
 
   useEffect(() => {
-    if (!user) return;
-    const uid = user.uid;
+    if (!user || !username) return;
+    const uid = username;
     const queueRef = collection(db, 'users', uid, 'queue');
+
+    const onErr = (err: Error) => {
+      console.error('[Firestore]', err.message);
+      if (err.message.includes('index')) {
+        setFirestoreError('Firestore index missing. Run: firebase deploy --only firestore:indexes');
+      } else {
+        setFirestoreError(err.message);
+      }
+    };
 
     // Unified queue — 3 filtered listeners by status
     const unsubPlaying = onSnapshot(
       query(queueRef, where('status', '==', 'playing'), orderBy('timestamp', 'asc')),
-      (snap) => setCurrentPlayers(snap.docs.map((d) => ({ id: d.id, ...d.data() }) as GamePlayer)),
+      (snap) => { setCurrentPlayers(snap.docs.map((d) => ({ id: d.id, ...d.data() }) as GamePlayer)); setFirestoreError(''); },
+      onErr,
     );
     const unsubWaiting = onSnapshot(
       query(queueRef, where('status', '==', 'waiting'), orderBy('timestamp', 'asc')),
       (snap) => setWaitingPlayers(snap.docs.map((d) => ({ id: d.id, ...d.data() }) as GamePlayer)),
+      onErr,
     );
     const unsubSkipped = onSnapshot(
       query(queueRef, where('status', '==', 'skipped'), orderBy('timestamp', 'asc')),
       (snap) => setHutangPlayers(snap.docs.map((d) => ({ id: d.id, ...d.data() }) as GamePlayer)),
+      onErr,
     );
     const unsubDonations = onSnapshot(
       query(collection(db, 'users', uid, 'donations'), orderBy('timestamp', 'desc'), limit(20)),
@@ -92,7 +105,7 @@ export default function DashboardPage() {
     setDebugResponse('');
     try {
       const parsed = JSON.parse(debugJson);
-      const res = await fetch(`/api/sociabuzz/${user.uid}`, {
+      const res = await fetch(`/api/sociabuzz/${uid}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(parsed),
@@ -132,7 +145,7 @@ export default function DashboardPage() {
     );
   }
 
-  const uid = user.uid;
+  const uid = username; // Firestore doc ID = email prefix (e.g. "luqmanbahrin2004")
   const totalPlayers = waitingPlayers.length + currentPlayers.length;
   const totalGames =
     waitingPlayers.reduce((s, p) => s + p.gamesLeft, 0) +
@@ -156,6 +169,13 @@ export default function DashboardPage() {
         </div>
       )}
 
+      {firestoreError && (
+        <div className="bg-red-50 border-b border-red-200 px-5 py-2.5 text-red-700 text-xs flex items-center gap-2">
+          <span className="font-bold">Firestore Error:</span>
+          <span className="font-mono">{firestoreError}</span>
+        </div>
+      )}
+
       <div className="bg-white border-b border-gray-200 px-5 py-2.5 shadow-sm">
         <div className="max-w-7xl mx-auto flex items-center gap-6 flex-wrap">
           {[
@@ -170,6 +190,22 @@ export default function DashboardPage() {
               <span className={`text-sm font-bold ${s.color}`}>{s.value}</span>
             </div>
           ))}
+          <div className="ml-auto flex items-center gap-2 flex-wrap">
+            {[
+              { label: 'Queue', href: `/queue?uid=${uid}` },
+              { label: 'Overlay', href: `/overlay?uid=${uid}` },
+            ].map((link) => (
+              <a
+                key={link.label}
+                href={link.href}
+                target="_blank"
+                rel="noreferrer"
+                className="text-[11px] font-semibold text-indigo-600 bg-indigo-50 hover:bg-indigo-100 border border-indigo-200 px-2.5 py-1 rounded-full transition-colors"
+              >
+                {link.label} ↗
+              </a>
+            ))}
+          </div>
         </div>
       </div>
 

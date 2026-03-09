@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { Suspense, useEffect, useState } from 'react';
 import { useSearchParams } from 'next/navigation';
 import { collection, onSnapshot, orderBy, query, where } from 'firebase/firestore';
 import { db } from '../../lib/firebase';
@@ -8,7 +8,7 @@ import type { GamePlayer } from '../../lib/queue';
 
 const MAX_QUEUE_ROWS = 8;
 
-export default function OverlayPage() {
+function OverlayContent() {
   const searchParams = useSearchParams();
   const uid = searchParams.get('uid');
   const [currentPlayers, setCurrentPlayers] = useState<GamePlayer[]>([]);
@@ -176,6 +176,14 @@ export default function OverlayPage() {
         )}
       </div>
     </div>
+  );
+}
+
+export default function OverlayPage() {
+  return (
+    <Suspense>
+      <OverlayContent />
+    </Suspense>
   );
 }
 

@@ -3,35 +3,45 @@ rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
 
-    match /users/{userId} {
-      // Owner can read/write their own profile
-      allow read, write: if request.auth != null && request.auth.uid == userId;
+    match /users/{username} {
+      // Creating: the new doc's uid field must match the signed-in user
+      allow create: if request.auth != null
+        && request.resource.data.uid == request.auth.uid;
+
+      // Reading/updating/deleting: the stored uid field must match
+      allow read, update, delete: if request.auth != null
+        && resource.data.uid == request.auth.uid;
 
       // Queue — public read (for /queue and /overlay pages), owner write
       match /queue/{docId} {
         allow read: if true;
-        allow write: if request.auth != null && request.auth.uid == userId;
+        allow write: if request.auth != null
+          && get(/databases/$(database)/documents/users/$(username)).data.uid == request.auth.uid;
       }
 
       // Donations — owner only
       match /donations/{docId} {
-        allow read, write: if request.auth != null && request.auth.uid == userId;
+        allow read, write: if request.auth != null
+          && get(/databases/$(database)/documents/users/$(username)).data.uid == request.auth.uid;
       }
 
       // History — owner only
       match /history/{docId} {
-        allow read, write: if request.auth != null && request.auth.uid == userId;
+        allow read, write: if request.auth != null
+          && get(/databases/$(database)/documents/users/$(username)).data.uid == request.auth.uid;
       }
 
-      // Comment album — public read (for overlay/preview), owner write
+      // Comment album — public read, owner write
       match /comment_album/{docId} {
         allow read: if true;
-        allow write: if request.auth != null && request.auth.uid == userId;
+        allow write: if request.auth != null
+          && get(/databases/$(database)/documents/users/$(username)).data.uid == request.auth.uid;
       }
 
       // Settings — owner only
       match /settings/{settingId} {
-        allow read, write: if request.auth != null && request.auth.uid == userId;
+        allow read, write: if request.auth != null
+          && get(/databases/$(database)/documents/users/$(username)).data.uid == request.auth.uid;
       }
     }
   }

@@ -3,10 +3,21 @@ import { onAuthStateChanged, User } from 'firebase/auth';
 import { auth } from './firebase';
 
 /**
- * Hook to subscribe to Firebase Auth state.
- * Returns { user, loading } — loading is true until the initial auth check resolves.
+ * Derives a stable, human-readable username from an email address.
+ * e.g. "luqmanbahrin2004@gmail.com" → "luqmanbahrin2004"
+ * Used as the Firestore document ID under users/.
  */
-export function useAuth(): { user: User | null; loading: boolean } {
+export function emailToUsername(email: string): string {
+  return email.split('@')[0].toLowerCase().replace(/[^a-z0-9_]/g, '_');
+}
+
+/**
+ * Hook to subscribe to Firebase Auth state.
+ * Returns { user, username, loading }.
+ * - username: derived from user.email, used as Firestore doc ID under users/
+ * - loading: true until the initial auth check resolves
+ */
+export function useAuth(): { user: User | null; username: string; loading: boolean } {
   const [user, setUser] = useState<User | null>(null);
   const [loading, setLoading] = useState(true);
 
@@ -18,5 +29,6 @@ export function useAuth(): { user: User | null; loading: boolean } {
     return unsub;
   }, []);
 
-  return { user, loading };
+  const username = user?.email ? emailToUsername(user.email) : '';
+  return { user, username, loading };
 }

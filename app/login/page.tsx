@@ -5,15 +5,24 @@ import { useRouter } from 'next/navigation';
 import { signInWithEmailAndPassword, signInWithPopup, GoogleAuthProvider } from 'firebase/auth';
 import { doc, getDoc, setDoc, serverTimestamp } from 'firebase/firestore';
 import { auth, db } from '../../lib/firebase';
+import { emailToUsername } from '../../lib/auth';
 import Link from 'next/link';
 
+/**
+ * Creates the user document under users/{username} on first login.
+ * Uses the email prefix as the document ID so Firestore paths are human-readable.
+ * The Firebase Auth UID is stored as a field for security rule checks.
+ */
 async function ensureUserDoc(uid: string, name: string | null, email: string | null) {
-  const ref = doc(db, 'users', uid);
+  if (!email) return;
+  const username = emailToUsername(email);
+  const ref = doc(db, 'users', username);
   const snap = await getDoc(ref);
   if (!snap.exists()) {
     await setDoc(ref, {
-      name: name ?? '',
-      email: email ?? '',
+      uid,
+      name: name ?? username,
+      email,
       createdAt: serverTimestamp(),
       plan: 'free',
     });
@@ -33,7 +42,8 @@ export default function LoginPage() {
     setLoading(true);
     setError('');
     try {
-      await signInWithEmailAndPassword(auth, email, password);
+      const result = await signInWithEmailAndPassword(auth, email, password);
+      await ensureUserDoc(result.user.uid, result.user.displayName, result.user.email);
       router.push('/dashboard');
     } catch {
       setError('Invalid email or password.');

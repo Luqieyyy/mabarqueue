@@ -4,6 +4,9 @@ import './globals.css';
 export const metadata: Metadata = {
   title: 'MabarQueue – Stream Queue Manager',
   description: 'Real-time viewer game queue management for livestreamers',
+  icons: {
+    icon: '/mabarqueue.png',
+  },
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
