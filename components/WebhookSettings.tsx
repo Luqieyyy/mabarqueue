@@ -1,26 +1,27 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { doc, getDoc, setDoc } from 'firebase/firestore';
-import { db } from '../lib/firebase';
 import {
   DEFAULT_TIERS,
   getRates,
   saveRates,
   getFeatures,
   saveFeatures,
+  getWebhookToken,
+  saveWebhookToken,
   type RateTier,
   type FeatureSettings,
 } from '../lib/settings';
 
 interface Props {
+  uid: string;
   isOpen: boolean;
   onClose: () => void;
 }
 
 type Tab = 'webhook' | 'rates' | 'features';
 
-export default function WebhookSettings({ isOpen, onClose }: Props) {
+export default function WebhookSettings({ uid, isOpen, onClose }: Props) {
   const [tab, setTab] = useState<Tab>('webhook');
 
   // ── Webhook tab state ──
@@ -42,20 +43,18 @@ export default function WebhookSettings({ isOpen, onClose }: Props) {
 
   useEffect(() => {
     if (typeof window !== 'undefined') {
-      setWebhookUrl(`${window.location.origin}/api/sociabuzz`);
+      setWebhookUrl(`${window.location.origin}/api/sociabuzz/${uid}`);
     }
-    getDoc(doc(db, 'settings', 'webhook')).then((snap) => {
-      if (snap.exists()) setToken(snap.data().token ?? '');
-    });
-    getRates().then(setTiers);
-    getFeatures().then(setFeatures);
-  }, []);
+    getWebhookToken(uid).then((t) => { if (t) setToken(t); });
+    getRates(uid).then(setTiers);
+    getFeatures(uid).then(setFeatures);
+  }, [uid]);
 
   // ── Webhook handlers ──
   const handleSaveToken = async () => {
     setSavingToken(true);
     try {
-      await setDoc(doc(db, 'settings', 'webhook'), { token: token.trim() }, { merge: true });
+      await saveWebhookToken(uid, token);
       setSavedToken(true);
       setTimeout(() => setSavedToken(false), 3000);
     } finally {
@@ -88,7 +87,7 @@ export default function WebhookSettings({ isOpen, onClose }: Props) {
       const sorted = [...tiers]
         .filter((t) => t.amount > 0 && t.games > 0)
         .sort((a, b) => a.amount - b.amount);
-      await saveRates(sorted);
+      await saveRates(uid, sorted);
       setTiers(sorted);
       setSavedRates(true);
       setTimeout(() => setSavedRates(false), 3000);
@@ -103,7 +102,7 @@ export default function WebhookSettings({ isOpen, onClose }: Props) {
   const handleSaveFeatures = async () => {
     setSavingFeatures(true);
     try {
-      await saveFeatures(features);
+      await saveFeatures(uid, features);
       setSavedFeatures(true);
       setTimeout(() => setSavedFeatures(false), 3000);
     } finally {

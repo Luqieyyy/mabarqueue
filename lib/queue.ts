@@ -17,14 +17,19 @@ import { db } from './firebase';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
+export type PlayerStatus = 'waiting' | 'playing' | 'skipped';
+
 export interface GamePlayer {
   id: string;
-  username: string;   // Sociabuzz donor name / manual entry
-  ign: string;        // In-Game Name displayed in overlay
-  totalGames: number; // Total games purchased (accumulates on re-donation)
-  gamesLeft: number;  // Remaining games to play
-  orderDate: string;  // e.g. "8 MARCH"
+  username: string;
+  ign: string;
+  totalGames: number;
+  gamesLeft: number;
+  status: PlayerStatus;
+  orderDate: string;
   timestamp: Timestamp | null;
+  player_id?: string;
+  transaction_id?: string;
 }
 
 export const MAX_GAME_SLOTS = 4;
@@ -39,136 +44,140 @@ export function formatOrderDate(date: Date = new Date()): string {
   return `${date.getDate()} ${months[date.getMonth()]}`;
 }
 
+function queueCol(uid: string) {
+  return collection(db, 'users', uid, 'queue');
+}
+
+function queueDoc(uid: string, docId: string) {
+  return doc(db, 'users', uid, 'queue', docId);
+}
+
+function historyCol(uid: string) {
+  return collection(db, 'users', uid, 'history');
+}
+
+async function getPlayingCount(uid: string): Promise<number> {
+  const snap = await getDocs(query(queueCol(uid), where('status', '==', 'playing')));
+  return snap.docs.length;
+}
+
 // ─── Add Player ───────────────────────────────────────────────────────────────
 
-/**
- * Adds a player to the system.
- * - If they are already IN GAME, bumps their totalGames + gamesLeft.
- * - If they are already in the queue, bumps their totals.
- * - If the game has an open slot (< 4 viewers), they join IN GAME directly.
- * - Otherwise they join the waiting queue.
- */
 export async function addPlayerToQueue(
+  uid: string,
   username: string,
   ign: string,
   games: number,
   orderDate?: string,
+  player_id?: string,
+  transaction_id?: string,
 ): Promise<void> {
   if (games <= 0) return;
   const date = orderDate ?? formatOrderDate();
 
-  // Check in current game
-  const gameSnap = await getDocs(collection(db, 'current_game'));
-  const inGame = gameSnap.docs.find((d) => d.data().username === username);
-  if (inGame) {
-    await updateDoc(inGame.ref, {
-      gamesLeft: inGame.data().gamesLeft + games,
-      totalGames: inGame.data().totalGames + games,
-    });
-    return;
-  }
+  const extras: Record<string, string> = {};
+  if (player_id) extras.player_id = player_id;
+  if (transaction_id) extras.transaction_id = transaction_id;
 
-  // Check in queue
-  const queueSnap = await getDocs(
-    query(collection(db, 'queue'), where('username', '==', username)),
+  // Check if player already exists in queue (any status)
+  const existingSnap = await getDocs(
+    query(queueCol(uid), where('username', '==', username)),
   );
-  if (!queueSnap.empty) {
-    const existing = queueSnap.docs[0];
+  if (!existingSnap.empty) {
+    const existing = existingSnap.docs[0];
     await updateDoc(existing.ref, {
       gamesLeft: existing.data().gamesLeft + games,
       totalGames: existing.data().totalGames + games,
+      ...extras,
     });
     return;
   }
 
-  // Fill open game slot if available
-  if (gameSnap.docs.length < MAX_GAME_SLOTS) {
-    await addDoc(collection(db, 'current_game'), {
-      username,
-      ign,
-      totalGames: games,
-      gamesLeft: games,
-      orderDate: date,
-      timestamp: serverTimestamp(),
-    });
-    return;
-  }
+  // Determine status: playing if slot open, otherwise waiting
+  const playingCount = await getPlayingCount(uid);
+  const status: PlayerStatus = playingCount < MAX_GAME_SLOTS ? 'playing' : 'waiting';
 
-  // Otherwise join the waiting queue
-  await addDoc(collection(db, 'queue'), {
-    username,
-    ign,
-    totalGames: games,
-    gamesLeft: games,
-    orderDate: date,
-    timestamp: serverTimestamp(),
+  await addDoc(queueCol(uid), {
+    username, ign, totalGames: games, gamesLeft: games,
+    status, orderDate: date, timestamp: serverTimestamp(), ...extras,
   });
 }
 
 // ─── Finish Game ──────────────────────────────────────────────────────────────
 
-/**
- * Streamer presses "Finish Game":
- * - Decrements gamesLeft by 1 for EVERY viewer currently in the game.
- * - Viewers who hit 0 are removed and replaced by the next in queue.
- */
-export async function finishGame(): Promise<void> {
-  const gameSnap = await getDocs(collection(db, 'current_game'));
-  if (gameSnap.empty) {
-    await promoteFromQueue();
-    return;
-  }
+export async function finishGame(uid: string): Promise<void> {
+  const playingSnap = await getDocs(
+    query(queueCol(uid), where('status', '==', 'playing')),
+  );
+  if (playingSnap.empty) return;
 
-  let removed = 0;
+  let slotsFreed = 0;
+
   await Promise.all(
-    gameSnap.docs.map(async (d) => {
-      const newLeft = d.data().gamesLeft - 1;
+    playingSnap.docs.map(async (d) => {
+      const data = d.data();
+      const newLeft = data.gamesLeft - 1;
+
       if (newLeft <= 0) {
+        // Move to history, delete from queue
+        await addDoc(historyCol(uid), {
+          username: data.username,
+          ign: data.ign,
+          player_id: data.player_id || null,
+          gamesPlayed: data.totalGames,
+          completedAt: serverTimestamp(),
+        });
         await deleteDoc(d.ref);
-        removed++;
+        slotsFreed++;
       } else {
         await updateDoc(d.ref, { gamesLeft: newLeft });
       }
     }),
   );
 
-  // For each freed slot, pull the next person from queue
-  for (let i = 0; i < removed; i++) {
-    await promoteFromQueue();
+  for (let i = 0; i < slotsFreed; i++) {
+    await promoteFromQueue(uid);
   }
 }
 
-// ─── Skip Current Player → Hutang ────────────────────────────────────────────
+// ─── Skip → Hutang (playing → skipped) ───────────────────────────────────────
 
-/**
- * Syno skips a specific in-game viewer (e.g. internet issues).
- * - Viewer moves to hutang_game WITHOUT any game deduction.
- * - Their slot is filled from the queue.
- */
-export async function skipCurrentPlayer(docId: string): Promise<void> {
-  const ref = doc(db, 'current_game', docId);
+export async function skipCurrentPlayer(uid: string, docId: string): Promise<void> {
+  const ref = queueDoc(uid, docId);
   const snap = await getDoc(ref);
-  if (!snap.exists()) return;
-
-  await addDoc(collection(db, 'hutang_game'), {
-    ...snap.data(),
-    skippedAt: serverTimestamp(),
-  });
-  await deleteDoc(ref);
-  await promoteFromQueue();
+  if (!snap.exists() || snap.data().status !== 'playing') return;
+  await updateDoc(ref, { status: 'skipped', timestamp: serverTimestamp() });
+  await promoteFromQueue(uid);
 }
 
-// ─── Remove Current Player ────────────────────────────────────────────────────
+// ─── Move Back to Queue (playing → waiting) ─────────────────────────────────
 
-export async function removeCurrentPlayer(docId: string): Promise<void> {
-  await deleteDoc(doc(db, 'current_game', docId));
-  await promoteFromQueue();
+export async function moveCurrentToQueue(uid: string, docId: string): Promise<void> {
+  const ref = queueDoc(uid, docId);
+  const snap = await getDoc(ref);
+  if (!snap.exists() || snap.data().status !== 'playing') return;
+  await updateDoc(ref, { status: 'waiting', timestamp: serverTimestamp() });
 }
 
-// ─── Adjust Current Player Games ─────────────────────────────────────────────
+// ─── Remove Player (any status) ──────────────────────────────────────────────
 
-export async function increaseCurrentGames(docId: string): Promise<void> {
-  const ref = doc(db, 'current_game', docId);
+export async function removeCurrentPlayer(uid: string, docId: string): Promise<void> {
+  await deleteDoc(queueDoc(uid, docId));
+  await promoteFromQueue(uid);
+}
+
+export async function removeFromQueue(uid: string, docId: string): Promise<void> {
+  await deleteDoc(queueDoc(uid, docId));
+}
+
+export async function removeHutang(uid: string, docId: string): Promise<void> {
+  await deleteDoc(queueDoc(uid, docId));
+}
+
+// ─── Adjust Games (works for any status) ─────────────────────────────────────
+
+export async function increaseCurrentGames(uid: string, docId: string): Promise<void> {
+  const ref = queueDoc(uid, docId);
   const snap = await getDoc(ref);
   if (!snap.exists()) return;
   await updateDoc(ref, {
@@ -177,110 +186,83 @@ export async function increaseCurrentGames(docId: string): Promise<void> {
   });
 }
 
-export async function decreaseCurrentGames(docId: string): Promise<void> {
-  const ref = doc(db, 'current_game', docId);
+export async function decreaseCurrentGames(uid: string, docId: string): Promise<void> {
+  const ref = queueDoc(uid, docId);
   const snap = await getDoc(ref);
   if (!snap.exists()) return;
-  const newLeft = snap.data().gamesLeft - 1;
+  const data = snap.data();
+  const newLeft = data.gamesLeft - 1;
   if (newLeft <= 0) {
+    if (data.status === 'playing') {
+      await addDoc(historyCol(uid), {
+        username: data.username, ign: data.ign,
+        player_id: data.player_id || null,
+        gamesPlayed: data.totalGames, completedAt: serverTimestamp(),
+      });
+    }
     await deleteDoc(ref);
-    await promoteFromQueue();
+    if (data.status === 'playing') await promoteFromQueue(uid);
   } else {
     await updateDoc(ref, { gamesLeft: newLeft });
   }
 }
 
-// ─── Queue Management ─────────────────────────────────────────────────────────
-
-export async function removeFromQueue(docId: string): Promise<void> {
-  await deleteDoc(doc(db, 'queue', docId));
+export async function increasePlayerGames(uid: string, docId: string): Promise<void> {
+  return increaseCurrentGames(uid, docId);
 }
 
-export async function skipQueuePlayer(docId: string): Promise<void> {
-  const ref = doc(db, 'queue', docId);
+export async function decreasePlayerGames(uid: string, docId: string): Promise<void> {
+  return decreaseCurrentGames(uid, docId);
+}
+
+export async function increaseHutangGames(uid: string, docId: string): Promise<void> {
+  return increaseCurrentGames(uid, docId);
+}
+
+export async function decreaseHutangGames(uid: string, docId: string): Promise<void> {
+  return decreaseCurrentGames(uid, docId);
+}
+
+// ─── Queue → In Game (waiting → playing) ────────────────────────────────────
+
+export async function promoteQueuePlayerToGame(uid: string, docId: string): Promise<void> {
+  const playingCount = await getPlayingCount(uid);
+  if (playingCount >= MAX_GAME_SLOTS) return;
+
+  const ref = queueDoc(uid, docId);
   const snap = await getDoc(ref);
-  if (!snap.exists()) return;
-  await addDoc(collection(db, 'hutang_game'), {
-    ...snap.data(),
-    skippedAt: serverTimestamp(),
-  });
-  await deleteDoc(ref);
+  if (!snap.exists() || snap.data().status !== 'waiting') return;
+  await updateDoc(ref, { status: 'playing' });
 }
 
-export async function increasePlayerGames(docId: string): Promise<void> {
-  const ref = doc(db, 'queue', docId);
+// ─── Queue → Hutang (waiting → skipped) ─────────────────────────────────────
+
+export async function skipQueuePlayer(uid: string, docId: string): Promise<void> {
+  const ref = queueDoc(uid, docId);
   const snap = await getDoc(ref);
-  if (!snap.exists()) return;
-  await updateDoc(ref, {
-    gamesLeft: snap.data().gamesLeft + 1,
-    totalGames: snap.data().totalGames + 1,
-  });
+  if (!snap.exists() || snap.data().status !== 'waiting') return;
+  await updateDoc(ref, { status: 'skipped', timestamp: serverTimestamp() });
 }
 
-export async function decreasePlayerGames(docId: string): Promise<void> {
-  const ref = doc(db, 'queue', docId);
+// ─── Hutang → Queue (skipped → waiting) ─────────────────────────────────────
+
+export async function settleHutang(uid: string, docId: string): Promise<void> {
+  const ref = queueDoc(uid, docId);
   const snap = await getDoc(ref);
-  if (!snap.exists()) return;
-  const newLeft = snap.data().gamesLeft - 1;
-  if (newLeft <= 0) {
-    await deleteDoc(ref);
-  } else {
-    await updateDoc(ref, { gamesLeft: newLeft });
-  }
+  if (!snap.exists() || snap.data().status !== 'skipped') return;
+  await updateDoc(ref, { status: 'waiting', timestamp: serverTimestamp() });
 }
 
-// ─── Hutang Game ──────────────────────────────────────────────────────────────
+// ─── Internal: Auto-promote oldest waiting player ───────────────────────────
 
-/** Move hutang player back to the waiting queue */
-export async function settleHutang(docId: string): Promise<void> {
-  const ref = doc(db, 'hutang_game', docId);
-  const snap = await getDoc(ref);
-  if (!snap.exists()) return;
-  await addDoc(collection(db, 'queue'), {
-    ...snap.data(),
-    timestamp: serverTimestamp(),
-  });
-  await deleteDoc(ref);
-}
-
-export async function removeHutang(docId: string): Promise<void> {
-  await deleteDoc(doc(db, 'hutang_game', docId));
-}
-
-export async function increaseHutangGames(docId: string): Promise<void> {
-  const ref = doc(db, 'hutang_game', docId);
-  const snap = await getDoc(ref);
-  if (!snap.exists()) return;
-  await updateDoc(ref, {
-    gamesLeft: snap.data().gamesLeft + 1,
-    totalGames: snap.data().totalGames + 1,
-  });
-}
-
-export async function decreaseHutangGames(docId: string): Promise<void> {
-  const ref = doc(db, 'hutang_game', docId);
-  const snap = await getDoc(ref);
-  if (!snap.exists()) return;
-  const newLeft = snap.data().gamesLeft - 1;
-  if (newLeft <= 0) {
-    await deleteDoc(ref);
-  } else {
-    await updateDoc(ref, { gamesLeft: newLeft });
-  }
-}
-
-// ─── Internal: Promote Next From Queue ───────────────────────────────────────
-
-async function promoteFromQueue(): Promise<void> {
-  const gameSnap = await getDocs(collection(db, 'current_game'));
-  if (gameSnap.docs.length >= MAX_GAME_SLOTS) return;
+async function promoteFromQueue(uid: string): Promise<void> {
+  const playingCount = await getPlayingCount(uid);
+  if (playingCount >= MAX_GAME_SLOTS) return;
 
   const nextSnap = await getDocs(
-    query(collection(db, 'queue'), orderBy('timestamp', 'asc'), limit(1)),
+    query(queueCol(uid), where('status', '==', 'waiting'), orderBy('timestamp', 'asc'), limit(1)),
   );
   if (nextSnap.empty) return;
 
-  const next = nextSnap.docs[0];
-  await addDoc(collection(db, 'current_game'), next.data());
-  await deleteDoc(next.ref);
+  await updateDoc(nextSnap.docs[0].ref, { status: 'playing' });
 }

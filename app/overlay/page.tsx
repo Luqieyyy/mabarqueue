@@ -1,27 +1,38 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { collection, onSnapshot, orderBy, query } from 'firebase/firestore';
+import { useSearchParams } from 'next/navigation';
+import { collection, onSnapshot, orderBy, query, where } from 'firebase/firestore';
 import { db } from '../../lib/firebase';
 import type { GamePlayer } from '../../lib/queue';
 
 const MAX_QUEUE_ROWS = 8;
 
 export default function OverlayPage() {
+  const searchParams = useSearchParams();
+  const uid = searchParams.get('uid');
   const [currentPlayers, setCurrentPlayers] = useState<GamePlayer[]>([]);
   const [queue, setQueue] = useState<GamePlayer[]>([]);
 
   useEffect(() => {
+    if (!uid) return;
+    const queueRef = collection(db, 'users', uid, 'queue');
     const unsubGame = onSnapshot(
-      query(collection(db, 'current_game'), orderBy('timestamp', 'asc')),
-      (snap) => setCurrentPlayers(snap.docs.map((d) => ({ id: d.id, ...d.data() }) as GamePlayer),),
+      query(queueRef, where('status', '==', 'playing'), orderBy('timestamp', 'asc')),
+      (snap) => setCurrentPlayers(snap.docs.map((d) => ({ id: d.id, ...d.data() }) as GamePlayer)),
     );
     const unsubQueue = onSnapshot(
-      query(collection(db, 'queue'), orderBy('timestamp', 'asc')),
-      (snap) => setQueue(snap.docs.map((d) => ({ id: d.id, ...d.data() }) as GamePlayer),),
+      query(queueRef, where('status', '==', 'waiting'), orderBy('timestamp', 'asc')),
+      (snap) => setQueue(snap.docs.map((d) => ({ id: d.id, ...d.data() }) as GamePlayer)),
     );
     return () => { unsubGame(); unsubQueue(); };
-  }, []);
+  }, [uid]);
+
+  if (!uid) return (
+    <div style={{ color: '#888', fontFamily: 'monospace', padding: '20px', fontSize: '12px' }}>
+      Missing ?uid= parameter. Use the overlay URL from your dashboard.
+    </div>
+  );
 
   // Hide overlay when nothing is queued
   if (currentPlayers.length === 0 && queue.length === 0) return null;

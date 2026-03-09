@@ -2,8 +2,37 @@ rules_version = '2';
 
 service cloud.firestore {
   match /databases/{database}/documents {
-    match /{document=**} {
-      allow read, write: if false;
+
+    match /users/{userId} {
+      // Owner can read/write their own profile
+      allow read, write: if request.auth != null && request.auth.uid == userId;
+
+      // Queue — public read (for /queue and /overlay pages), owner write
+      match /queue/{docId} {
+        allow read: if true;
+        allow write: if request.auth != null && request.auth.uid == userId;
+      }
+
+      // Donations — owner only
+      match /donations/{docId} {
+        allow read, write: if request.auth != null && request.auth.uid == userId;
+      }
+
+      // History — owner only
+      match /history/{docId} {
+        allow read, write: if request.auth != null && request.auth.uid == userId;
+      }
+
+      // Comment album — public read (for overlay/preview), owner write
+      match /comment_album/{docId} {
+        allow read: if true;
+        allow write: if request.auth != null && request.auth.uid == userId;
+      }
+
+      // Settings — owner only
+      match /settings/{settingId} {
+        allow read, write: if request.auth != null && request.auth.uid == userId;
+      }
     }
   }
 }

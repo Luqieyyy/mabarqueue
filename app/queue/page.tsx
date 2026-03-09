@@ -1,20 +1,25 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { collection, onSnapshot, orderBy, query } from 'firebase/firestore';
+import { useSearchParams } from 'next/navigation';
+import { collection, onSnapshot, orderBy, query, where } from 'firebase/firestore';
 import { db } from '../../lib/firebase';
 import type { GamePlayer } from '../../lib/queue';
 
 const GAME_DURATION_MIN = 15;
 
 export default function QueuePage() {
+  const searchParams = useSearchParams();
+  const uid = searchParams.get('uid');
   const [currentPlayers, setCurrentPlayers] = useState<GamePlayer[]>([]);
   const [queue, setQueue] = useState<GamePlayer[]>([]);
   const [ready, setReady] = useState(false);
 
   useEffect(() => {
+    if (!uid) { setReady(true); return; }
+    const queueRef = collection(db, 'users', uid, 'queue');
     const unsubGame = onSnapshot(
-      query(collection(db, 'current_game'), orderBy('timestamp', 'asc')),
+      query(queueRef, where('status', '==', 'playing'), orderBy('timestamp', 'asc')),
       (snap) => {
         setCurrentPlayers(snap.docs.map((d) => ({ id: d.id, ...d.data() }) as GamePlayer));
         setReady(true);
@@ -22,11 +27,11 @@ export default function QueuePage() {
       (err) => { console.error('Firestore error:', err); setReady(true); },
     );
     const unsubQueue = onSnapshot(
-      query(collection(db, 'queue'), orderBy('timestamp', 'asc')),
-      (snap) => setQueue(snap.docs.map((d) => ({ id: d.id, ...d.data() }) as GamePlayer),),
+      query(queueRef, where('status', '==', 'waiting'), orderBy('timestamp', 'asc')),
+      (snap) => setQueue(snap.docs.map((d) => ({ id: d.id, ...d.data() }) as GamePlayer)),
     );
     return () => { unsubGame(); unsubQueue(); };
-  }, []);
+  }, [uid]);
 
   const estimatedWait = (position: number): string => {
     const currentGames = currentPlayers.reduce((s, p) => s + p.gamesLeft, 0);

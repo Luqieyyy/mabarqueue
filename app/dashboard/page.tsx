@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { collection, doc, limit, onSnapshot, orderBy, query } from 'firebase/firestore';
+import { collection, limit, onSnapshot, orderBy, query, where } from 'firebase/firestore';
 import { db } from '../../lib/firebase';
 import { useAuth } from '../../lib/auth';
 import {
@@ -20,6 +20,8 @@ import {
   removeHutang,
   increaseHutangGames,
   decreaseHutangGames,
+  moveCurrentToQueue,
+  promoteQueuePlayerToGame,
 } from '../../lib/queue';
 import type { GamePlayer } from '../../lib/queue';
 import Navbar from '../../components/Navbar';
@@ -27,21 +29,26 @@ import CurrentPlayerPanel from '../../components/CurrentPlayerPanel';
 import QueueList from '../../components/QueueList';
 import AddPlayerForm from '../../components/AddPlayerForm';
 import DonationFeed, { type Donation } from '../../components/DonationFeed';
-import OverlayPreview from '../../components/OverlayPreview';
+import LivePreview from '../../components/LivePreview';
 import WebhookSettings from '../../components/WebhookSettings';
 import HutangGamePanel from '../../components/HutangGamePanel';
+import CommentAlbumFeed, { type AlbumEntry } from '../../components/CommentAlbumFeed';
 
 export default function DashboardPage() {
   const router = useRouter();
   const { user, loading: authLoading } = useAuth();
 
   const [currentPlayers, setCurrentPlayers] = useState<GamePlayer[]>([]);
-  const [queue, setQueue] = useState<GamePlayer[]>([]);
-  const [hutang, setHutang] = useState<GamePlayer[]>([]);
+  const [waitingPlayers, setWaitingPlayers] = useState<GamePlayer[]>([]);
+  const [hutangPlayers, setHutangPlayers] = useState<GamePlayer[]>([]);
   const [donations, setDonations] = useState<Donation[]>([]);
+  const [albumEntries, setAlbumEntries] = useState<AlbumEntry[]>([]);
   const [loading, setLoading] = useState(false);
   const [toast, setToast] = useState('');
   const [showWebhookSettings, setShowWebhookSettings] = useState(false);
+  const [debugJson, setDebugJson] = useState('{\n  "id": "test-001",\n  "amount": 1,\n  "supporter": "TestDonor",\n  "message": "43149159 Luqieyyy",\n  "level": { "title": "PACKAGE MABAR 1 GAME" }\n}');
+  const [debugResponse, setDebugResponse] = useState('');
+  const [debugLoading, setDebugLoading] = useState(false);
 
   useEffect(() => {
     if (!authLoading && !user) router.push('/login');
@@ -49,34 +56,55 @@ export default function DashboardPage() {
 
   useEffect(() => {
     if (!user) return;
+    const uid = user.uid;
+    const queueRef = collection(db, 'users', uid, 'queue');
 
-    const unsubGame = onSnapshot(
-      query(collection(db, 'current_game'), orderBy('timestamp', 'asc')),
+    // Unified queue — 3 filtered listeners by status
+    const unsubPlaying = onSnapshot(
+      query(queueRef, where('status', '==', 'playing'), orderBy('timestamp', 'asc')),
       (snap) => setCurrentPlayers(snap.docs.map((d) => ({ id: d.id, ...d.data() }) as GamePlayer)),
     );
-
-    const unsubQueue = onSnapshot(
-      query(collection(db, 'queue'), orderBy('timestamp', 'asc')),
-      (snap) => setQueue(snap.docs.map((d) => ({ id: d.id, ...d.data() }) as GamePlayer)),
+    const unsubWaiting = onSnapshot(
+      query(queueRef, where('status', '==', 'waiting'), orderBy('timestamp', 'asc')),
+      (snap) => setWaitingPlayers(snap.docs.map((d) => ({ id: d.id, ...d.data() }) as GamePlayer)),
     );
-
-    const unsubHutang = onSnapshot(
-      query(collection(db, 'hutang_game'), orderBy('timestamp', 'asc')),
-      (snap) => setHutang(snap.docs.map((d) => ({ id: d.id, ...d.data() }) as GamePlayer)),
+    const unsubSkipped = onSnapshot(
+      query(queueRef, where('status', '==', 'skipped'), orderBy('timestamp', 'asc')),
+      (snap) => setHutangPlayers(snap.docs.map((d) => ({ id: d.id, ...d.data() }) as GamePlayer)),
     );
-
     const unsubDonations = onSnapshot(
-      query(collection(db, 'donations'), orderBy('timestamp', 'desc'), limit(20)),
+      query(collection(db, 'users', uid, 'donations'), orderBy('timestamp', 'desc'), limit(20)),
       (snap) => setDonations(snap.docs.map((d) => ({ id: d.id, ...d.data() }) as Donation)),
+    );
+    const unsubAlbum = onSnapshot(
+      query(collection(db, 'users', uid, 'comment_album'), orderBy('timestamp', 'desc'), limit(30)),
+      (snap) => setAlbumEntries(snap.docs.map((d) => ({ id: d.id, ...d.data() }) as AlbumEntry)),
     );
 
     return () => {
-      unsubGame();
-      unsubQueue();
-      unsubHutang();
-      unsubDonations();
+      unsubPlaying(); unsubWaiting(); unsubSkipped(); unsubDonations(); unsubAlbum();
     };
   }, [user]);
+
+  async function sendDebugWebhook() {
+    if (!user) return;
+    setDebugLoading(true);
+    setDebugResponse('');
+    try {
+      const parsed = JSON.parse(debugJson);
+      const res = await fetch(`/api/sociabuzz/${user.uid}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(parsed),
+      });
+      const data = await res.json();
+      setDebugResponse(JSON.stringify(data, null, 2));
+    } catch (err) {
+      setDebugResponse(`Error: ${err instanceof Error ? err.message : String(err)}`);
+    } finally {
+      setDebugLoading(false);
+    }
+  }
 
   function showToast(msg: string) {
     setToast(msg);
@@ -104,9 +132,10 @@ export default function DashboardPage() {
     );
   }
 
-  const totalPlayers = queue.length + currentPlayers.length;
+  const uid = user.uid;
+  const totalPlayers = waitingPlayers.length + currentPlayers.length;
   const totalGames =
-    queue.reduce((s, p) => s + p.gamesLeft, 0) +
+    waitingPlayers.reduce((s, p) => s + p.gamesLeft, 0) +
     currentPlayers.reduce((s, p) => s + p.gamesLeft, 0);
 
   return (
@@ -116,25 +145,25 @@ export default function DashboardPage() {
         onSettings={() => setShowWebhookSettings(true)}
       />
       <WebhookSettings
+        uid={uid}
         isOpen={showWebhookSettings}
         onClose={() => setShowWebhookSettings(false)}
       />
 
-      {/* Toast */}
       {toast && (
         <div className="fixed top-4 left-1/2 -translate-x-1/2 z-50 bg-gray-900 text-white text-sm px-5 py-2.5 rounded-full shadow-xl animate-fade-slide-in">
           {toast}
         </div>
       )}
 
-      {/* Stats bar */}
       <div className="bg-white border-b border-gray-200 px-5 py-2.5 shadow-sm">
         <div className="max-w-7xl mx-auto flex items-center gap-6 flex-wrap">
           {[
             { label: 'Total Players', value: totalPlayers, color: 'text-indigo-600' },
             { label: 'Games Left', value: totalGames, color: 'text-emerald-600' },
-            { label: 'In Queue', value: queue.length, color: 'text-amber-600' },
-            { label: 'Hutang', value: hutang.length, color: 'text-red-500' },
+            { label: 'In Queue', value: waitingPlayers.length, color: 'text-amber-600' },
+            { label: 'Hutang', value: hutangPlayers.length, color: 'text-red-500' },
+            { label: 'Album', value: albumEntries.length, color: 'text-purple-600' },
           ].map((s) => (
             <div key={s.label} className="flex items-center gap-2">
               <span className="text-xs text-gray-500">{s.label}</span>
@@ -144,72 +173,84 @@ export default function DashboardPage() {
         </div>
       </div>
 
-      {/* Main layout */}
       <div className="max-w-7xl mx-auto p-4 md:p-6 space-y-4">
-
-        {/* Row 1: Current Game (left, big) + Queue Table (right, small) */}
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
-
-          {/* Left: Current Game + Add Player */}
-          <div className="lg:col-span-2 flex flex-col gap-4">
-            <CurrentPlayerPanel
-              players={currentPlayers}
-              loading={loading}
-              onFinishGame={() => run(finishGame, 'Game finished — all viewers −1')}
-              onSkip={(id) => run(() => skipCurrentPlayer(id), 'Player moved to Hutang')}
-              onRemove={(id) => run(() => removeCurrentPlayer(id), 'Player removed')}
-              onIncrease={(id) => run(() => increaseCurrentGames(id), 'Game added')}
-              onDecrease={(id) => run(() => decreaseCurrentGames(id), 'Game removed')}
-            />
-            <AddPlayerForm
-              onAdd={(ign, games) =>
-                run(() => addPlayerToQueue(ign, ign, games), `${ign} added`)
-              }
-              loading={loading}
-            />
-          </div>
-
-          {/* Right: Queue Table */}
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+          <CurrentPlayerPanel
+            players={currentPlayers}
+            loading={loading}
+            onFinishGame={() => run(() => finishGame(uid), 'Game finished — all viewers −1')}
+            onSkip={(id) => run(() => skipCurrentPlayer(uid, id), 'Player moved to Hutang')}
+            onMoveToQueue={(id) => run(() => moveCurrentToQueue(uid, id), 'Player moved to Queue')}
+            onRemove={(id) => run(() => removeCurrentPlayer(uid, id), 'Player removed')}
+            onIncrease={(id) => run(() => increaseCurrentGames(uid, id), 'Game added')}
+            onDecrease={(id) => run(() => decreaseCurrentGames(uid, id), 'Game removed')}
+          />
           <div className="bg-white border border-gray-200 rounded-2xl shadow-sm p-5">
             <div className="flex items-center justify-between mb-4">
               <div>
-                <h2 className="text-sm font-bold text-gray-700 uppercase tracking-widest">
-                  Waiting Queue
-                </h2>
-                <p className="text-xs text-gray-400 mt-0.5">
-                  Columns: Nickname · Jumlah Game · Waktu Order · Baki Game
-                </p>
+                <h2 className="text-xs font-bold text-gray-700 uppercase tracking-widest">Waiting Queue</h2>
+                <p className="text-[11px] text-gray-400 mt-0.5">IGN · Tarikh · Baki Game</p>
               </div>
               <span className="text-xs font-mono text-gray-400 bg-gray-100 px-2.5 py-1 rounded-full">
-                {queue.length} waiting
+                {waitingPlayers.length} waiting
               </span>
             </div>
-            <div className="max-h-[480px] overflow-y-auto pr-1">
+            <div className="max-h-[420px] overflow-y-auto pr-1">
               <QueueList
-                players={queue}
-                onIncrease={(id) => run(() => increasePlayerGames(id), 'Games +1')}
-                onDecrease={(id) => run(() => decreasePlayerGames(id), 'Games −1')}
-                onSkip={(id) => run(() => skipQueuePlayer(id), 'Moved to Hutang')}
-                onRemove={(id) => run(() => removeFromQueue(id), 'Player removed')}
+                players={waitingPlayers}
+                currentCount={currentPlayers.length}
+                onIncrease={(id) => run(() => increasePlayerGames(uid, id), 'Games +1')}
+                onDecrease={(id) => run(() => decreasePlayerGames(uid, id), 'Games −1')}
+                onSkip={(id) => run(() => skipQueuePlayer(uid, id), 'Moved to Hutang')}
+                onRemove={(id) => run(() => removeFromQueue(uid, id), 'Player removed')}
+                onPromote={(id) => run(() => promoteQueuePlayerToGame(uid, id), 'Player promoted to In Game')}
               />
             </div>
           </div>
         </div>
 
-        {/* Row 2: Hutang Game + Donation Feed + OBS Preview */}
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
-          <HutangGamePanel
-            players={hutang}
+          <AddPlayerForm
+            onAdd={(ign, games) => run(() => addPlayerToQueue(uid, ign, ign, games), `${ign} added`)}
             loading={loading}
-            onSettle={(id) => run(() => settleHutang(id), 'Moved back to queue')}
-            onRemove={(id) => run(() => removeHutang(id), 'Removed from hutang')}
-            onIncrease={(id) => run(() => increaseHutangGames(id), 'Games +1')}
-            onDecrease={(id) => run(() => decreaseHutangGames(id), 'Games −1')}
+          />
+          <HutangGamePanel
+            players={hutangPlayers}
+            loading={loading}
+            onSettle={(id) => run(() => settleHutang(uid, id), 'Moved back to queue')}
+            onRemove={(id) => run(() => removeHutang(uid, id), 'Removed from hutang')}
+            onIncrease={(id) => run(() => increaseHutangGames(uid, id), 'Games +1')}
+            onDecrease={(id) => run(() => decreaseHutangGames(uid, id), 'Games −1')}
           />
           <DonationFeed donations={donations} />
-          <OverlayPreview currentPlayers={currentPlayers} queue={queue} />
         </div>
 
+        <CommentAlbumFeed entries={albumEntries} />
+        <LivePreview currentPlayers={currentPlayers} queue={waitingPlayers} albumEntries={albumEntries} />
+
+        {/* DEBUG */}
+        <div className="bg-yellow-50 border border-yellow-300 rounded-2xl p-4 space-y-3">
+          <div className="flex items-center gap-2">
+            <span className="text-xs font-bold text-yellow-700 uppercase tracking-widest">Debug — Webhook Tester</span>
+            <span className="text-xs text-yellow-600 bg-yellow-100 px-2 py-0.5 rounded-full">Sementara je</span>
+          </div>
+          <p className="text-[11px] text-yellow-700 font-mono">POST /api/sociabuzz/<span className="font-bold">{uid}</span></p>
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
+            <div className="space-y-2">
+              <label className="text-xs text-yellow-700 font-medium">JSON Payload</label>
+              <textarea value={debugJson} onChange={(e) => setDebugJson(e.target.value)} rows={8} className="w-full font-mono text-xs bg-white border border-yellow-200 rounded-lg p-3 focus:outline-none focus:ring-2 focus:ring-yellow-400 resize-none" spellCheck={false} />
+              <button onClick={sendDebugWebhook} disabled={debugLoading} className="w-full bg-yellow-500 hover:bg-yellow-600 disabled:opacity-50 text-white text-sm font-semibold py-2 rounded-lg transition-colors">
+                {debugLoading ? 'Sending...' : `Send to /api/sociabuzz/${uid}`}
+              </button>
+            </div>
+            <div className="space-y-2">
+              <label className="text-xs text-yellow-700 font-medium">Response</label>
+              <pre className="w-full h-[calc(100%-2rem)] min-h-[8rem] font-mono text-xs bg-white border border-yellow-200 rounded-lg p-3 overflow-auto whitespace-pre-wrap break-all text-gray-700">
+                {debugResponse || '— tekan Send untuk tengok response —'}
+              </pre>
+            </div>
+          </div>
+        </div>
       </div>
     </div>
   );
