@@ -116,6 +116,27 @@ function extractDonation(body: Record<string, unknown>): ParsedDonation | null {
     };
   }
 
+  // Format 5 — event-based: { event: "...", data: { supporter_name, amount, message } }
+  if (body.data && typeof body.data === 'object') {
+    const d = body.data as Record<string, unknown>;
+    if (d.supporter_name != null || d.donatur_name != null || d.name != null) {
+      return {
+        donorName: String(d.supporter_name ?? d.donatur_name ?? d.name ?? ''),
+        amount: Number(d.amount ?? d.price ?? 0),
+        message: String(d.message ?? ''),
+      };
+    }
+  }
+
+  // Format 6 — flat with "name" field: { name, amount, message }
+  if (body.name != null && body.amount != null) {
+    return {
+      donorName: String(body.name),
+      amount: Number(body.amount ?? 0),
+      message: String(body.message ?? ''),
+    };
+  }
+
   return null;
 }
 
