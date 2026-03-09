@@ -1,4 +1,4 @@
-# SynoQueue
+# MabarQueue
 
 **Automated live mabar queue management system for streamers.**
 Viewers donate via Sociabuzz → auto-join the game queue → streamer presses Finish Game → deducts games automatically.
