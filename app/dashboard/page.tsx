@@ -97,7 +97,7 @@ export default function DashboardPage() {
     return () => {
       unsubPlaying(); unsubWaiting(); unsubSkipped(); unsubDonations(); unsubAlbum();
     };
-  }, [user]);
+  }, [user, username]);
 
   async function sendDebugWebhook() {
     if (!user) return;

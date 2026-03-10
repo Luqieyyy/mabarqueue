@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import {
   DEFAULT_TIERS,
   getRates,
@@ -67,12 +67,7 @@ export default function WebhookSettings({ uid, isOpen, onClose }: Props) {
     getFeatures(uid).then(setFeatures);
   }, [uid]);
 
-  // Load packages when tab is selected
-  useEffect(() => {
-    if (tab === 'packages') loadPackages();
-  }, [tab, uid]);
-
-  async function loadPackages() {
+  const loadPackages = useCallback(async () => {
     setLoadingPackages(true);
     try {
       const pkgs = await getPackages(uid);
@@ -80,7 +75,12 @@ export default function WebhookSettings({ uid, isOpen, onClose }: Props) {
     } finally {
       setLoadingPackages(false);
     }
-  }
+  }, [uid]);
+
+  // Load packages when tab is selected
+  useEffect(() => {
+    if (tab === 'packages') loadPackages();
+  }, [tab, loadPackages]);
 
   // ── Webhook handlers ──
   const handleSaveToken = async () => {
@@ -603,7 +603,7 @@ export default function WebhookSettings({ uid, isOpen, onClose }: Props) {
                   <li>Packages are auto-created from Sociabuzz level titles</li>
                   <li>Each streamer has unique packages based on their Sociabuzz setup</li>
                   <li>Disabled packages will reject new queue entries</li>
-                  <li>Deleting a package won't affect existing donation history</li>
+                  <li>Deleting a package won&apos;t affect existing donation history</li>
                   <li>Use Sync to rebuild packages from past donations</li>
                 </ul>
               </div>
