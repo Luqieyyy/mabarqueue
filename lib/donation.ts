@@ -51,31 +51,30 @@ export function parseMessage(message: string): ParsedMessage | null {
     return { player_id: idLabelMatch[1], ign: idLabelMatch[2] };
   }
 
-  // Strategy 3: Generic — find a 6–10 digit number, take the next word as IGN
-  // Handles "43149159 luqman", "bang 43149159 luqman nak main", etc.
-  // The optional (\d+) handles server IDs like "43149159(1234)"
-  const genericMatch = cleaned.match(
-    /(\d{6,10})(?:\s*\(\d+\))?\s+(\S+)/
-  );
+  // Strategy 3: Generic — find a 6–10 digit number, collect words as IGN
+  // Stops when hitting a filler/connector word that's clearly not part of the IGN.
+  // Handles multi-word IGNs: "43149159 Luqman bahrin bang nak main" → ign: "Luqman bahrin"
+  const genericMatch = cleaned.match(/(\d{6,10})(?:\s*\(\d+\))?\s+(.+)/);
   if (genericMatch) {
-    let ign = genericMatch[2];
-    // Skip filler words that are clearly not an IGN
     const fillerWords = new Set([
       'ign', 'ign:', 'nama', 'name', 'name:', 'nick', 'nick:',
       'nickname', 'nickname:', 'id', 'id:', 'saya', 'nak', 'mau',
-      'ingin', 'tolong', 'please', 'bang', 'bro',
+      'ingin', 'tolong', 'please', 'bang', 'bro', 'kak', 'abang',
+      'la', 'lah', 'ya', 'ye', 'ok', 'okay', 'join', 'add',
+      'sekali', 'dua', 'tiga', 'main', 'game', 'nak', 'nk',
     ]);
-    if (fillerWords.has(ign.toLowerCase())) {
-      // If the word after the ID is filler, try the word after that
-      const afterFiller = cleaned
-        .slice(cleaned.indexOf(genericMatch[0]) + genericMatch[0].length)
-        .trim()
-        .match(/^(\S+)/);
-      if (afterFiller) {
-        ign = afterFiller[1];
-      }
+    const words = genericMatch[2].trim().split(/\s+/);
+    // Skip leading filler words (e.g. "ign luqman" → skip "ign")
+    let start = 0;
+    while (start < words.length && fillerWords.has(words[start].toLowerCase())) start++;
+    // Collect words until we hit a filler/connector
+    const ignWords: string[] = [];
+    for (let i = start; i < words.length; i++) {
+      if (fillerWords.has(words[i].toLowerCase())) break;
+      ignWords.push(words[i]);
     }
-    return { player_id: genericMatch[1], ign };
+    const ign = ignWords.join(' ').trim();
+    if (ign) return { player_id: genericMatch[1], ign };
   }
 
   // Strategy 4: Message contains only a bare ML ID with no IGN
@@ -120,6 +119,55 @@ export function extractGamesFromPackage(title: string | undefined | null): numbe
   if (match) {
     const games = parseInt(match[1], 10);
     return games > 0 ? games : null;
+  }
+
+  // Look for a number followed by "MATCH"
+  const matchMatch = title.match(/(\d+)\s*MATCH/i);
+  if (matchMatch) {
+    const games = parseInt(matchMatch[1], 10);
+    return games > 0 ? games : null;
+  }
+
+  return null;
+}
+
+// ─── Level Info Extraction ───────────────────────────────────────────────────
+
+export interface LevelInfo {
+  title: string;
+  price: number;
+  description: string;
+}
+
+/**
+ * Extracts level/package info from a Sociabuzz webhook body.
+ * Returns null if no level field is present.
+ */
+export function extractLevelInfo(body: Record<string, unknown>): LevelInfo | null {
+  const findLevel = (obj: Record<string, unknown>): LevelInfo | null => {
+    if (obj.level && typeof obj.level === 'object') {
+      const level = obj.level as Record<string, unknown>;
+      if (level.title) {
+        return {
+          title: String(level.title).trim(),
+          price: parseFloat(String(level.price ?? '0')) || 0,
+          description: String(level.description ?? '').trim(),
+        };
+      }
+    }
+    return null;
+  };
+
+  // Check top-level
+  let info = findLevel(body);
+  if (info) return info;
+
+  // Check nested objects (donation, support, data)
+  for (const key of ['donation', 'support', 'data']) {
+    if (body[key] && typeof body[key] === 'object') {
+      info = findLevel(body[key] as Record<string, unknown>);
+      if (info) return info;
+    }
   }
 
   return null;

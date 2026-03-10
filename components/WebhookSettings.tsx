@@ -12,6 +12,14 @@ import {
   type RateTier,
   type FeatureSettings,
 } from '../lib/settings';
+import {
+  getPackages,
+  deletePackage,
+  togglePackage,
+  updatePackageMatchCount,
+  syncPackages,
+  type StreamerPackage,
+} from '../lib/packages';
 
 interface Props {
   uid: string;
@@ -19,7 +27,7 @@ interface Props {
   onClose: () => void;
 }
 
-type Tab = 'webhook' | 'rates' | 'features';
+type Tab = 'webhook' | 'rates' | 'packages' | 'features';
 
 export default function WebhookSettings({ uid, isOpen, onClose }: Props) {
   const [tab, setTab] = useState<Tab>('webhook');
@@ -36,6 +44,15 @@ export default function WebhookSettings({ uid, isOpen, onClose }: Props) {
   const [savingRates, setSavingRates] = useState(false);
   const [savedRates, setSavedRates] = useState(false);
 
+  // ── Packages tab state ──
+  const [packages, setPackages] = useState<StreamerPackage[]>([]);
+  const [loadingPackages, setLoadingPackages] = useState(false);
+  const [syncing, setSyncing] = useState(false);
+  const [syncResult, setSyncResult] = useState<string | null>(null);
+  const [editingMatch, setEditingMatch] = useState<string | null>(null);
+  const [editMatchValue, setEditMatchValue] = useState(1);
+  const [confirmDelete, setConfirmDelete] = useState<string | null>(null);
+
   // ── Features tab state ──
   const [features, setFeatures] = useState<FeatureSettings>({ commentAlbum: false });
   const [savingFeatures, setSavingFeatures] = useState(false);
@@ -49,6 +66,21 @@ export default function WebhookSettings({ uid, isOpen, onClose }: Props) {
     getRates(uid).then(setTiers);
     getFeatures(uid).then(setFeatures);
   }, [uid]);
+
+  // Load packages when tab is selected
+  useEffect(() => {
+    if (tab === 'packages') loadPackages();
+  }, [tab, uid]);
+
+  async function loadPackages() {
+    setLoadingPackages(true);
+    try {
+      const pkgs = await getPackages(uid);
+      setPackages(pkgs);
+    } finally {
+      setLoadingPackages(false);
+    }
+  }
 
   // ── Webhook handlers ──
   const handleSaveToken = async () => {
@@ -98,6 +130,41 @@ export default function WebhookSettings({ uid, isOpen, onClose }: Props) {
 
   const resetToDefault = () => setTiers(DEFAULT_TIERS);
 
+  // ── Package handlers ──
+  const handleDeletePackage = async (title: string) => {
+    await deletePackage(uid, title);
+    setPackages((prev) => prev.filter((p) => p.title !== title));
+    setConfirmDelete(null);
+  };
+
+  const handleTogglePackage = async (title: string, isActive: boolean) => {
+    await togglePackage(uid, title, isActive);
+    setPackages((prev) =>
+      prev.map((p) => (p.title === title ? { ...p, isActive } : p)),
+    );
+  };
+
+  const handleSaveMatchCount = async (title: string) => {
+    await updatePackageMatchCount(uid, title, editMatchValue);
+    setPackages((prev) =>
+      prev.map((p) => (p.title === title ? { ...p, matchCount: editMatchValue } : p)),
+    );
+    setEditingMatch(null);
+  };
+
+  const handleSyncPackages = async () => {
+    setSyncing(true);
+    setSyncResult(null);
+    try {
+      const count = await syncPackages(uid);
+      setSyncResult(`${count} new package${count !== 1 ? 's' : ''} synced`);
+      await loadPackages();
+      setTimeout(() => setSyncResult(null), 4000);
+    } finally {
+      setSyncing(false);
+    }
+  };
+
   // ── Features handlers ──
   const handleSaveFeatures = async () => {
     setSavingFeatures(true);
@@ -135,13 +202,13 @@ export default function WebhookSettings({ uid, isOpen, onClose }: Props) {
               onClick={onClose}
               className="w-8 h-8 flex items-center justify-center text-gray-400 hover:text-gray-700 hover:bg-gray-100 rounded-lg transition-all text-lg mt-0.5"
             >
-              ×
+              x
             </button>
           </div>
 
           {/* Tabs */}
           <div className="flex bg-gray-100 rounded-xl p-1 mb-5">
-            {(['webhook', 'rates', 'features'] as Tab[]).map((t) => (
+            {(['webhook', 'rates', 'packages', 'features'] as Tab[]).map((t) => (
               <button
                 key={t}
                 onClick={() => setTab(t)}
@@ -151,7 +218,7 @@ export default function WebhookSettings({ uid, isOpen, onClose }: Props) {
                     : 'text-gray-500 hover:text-gray-700'
                 }`}
               >
-                {t === 'webhook' ? 'Webhook' : t === 'rates' ? 'Rates' : 'Features'}
+                {t === 'webhook' ? 'Webhook' : t === 'rates' ? 'Rates' : t === 'packages' ? 'Packages' : 'Features'}
               </button>
             ))}
           </div>
@@ -304,7 +371,7 @@ export default function WebhookSettings({ uid, isOpen, onClose }: Props) {
                         onClick={() => updateTier(i, 'games', Math.max(1, tier.games - 1))}
                         className="w-6 h-6 flex items-center justify-center bg-white border border-gray-200 rounded-md text-gray-500 hover:bg-gray-100 text-xs font-bold transition-all"
                       >
-                        −
+                        -
                       </button>
                       <span className="w-8 text-center text-sm font-bold text-gray-900">{tier.games}</span>
                       <button
@@ -320,7 +387,7 @@ export default function WebhookSettings({ uid, isOpen, onClose }: Props) {
                       onClick={() => removeTier(i)}
                       className="w-6 h-6 flex items-center justify-center text-gray-300 hover:text-red-400 hover:bg-red-50 rounded-md transition-all text-base"
                     >
-                      ×
+                      x
                     </button>
                   </div>
                 ))}
@@ -366,6 +433,179 @@ export default function WebhookSettings({ uid, isOpen, onClose }: Props) {
                       </span>
                     ))}
                 </div>
+              </div>
+            </div>
+          )}
+
+          {/* ── TAB: PACKAGES ── */}
+          {tab === 'packages' && (
+            <div className="space-y-4">
+              <div>
+                <p className="text-xs text-gray-500 leading-relaxed">
+                  Packages are auto-detected from Sociabuzz donations. Each streamer has their own packages based on their Sociabuzz page setup.
+                </p>
+              </div>
+
+              {/* Sync button */}
+              <button
+                onClick={handleSyncPackages}
+                disabled={syncing}
+                className="w-full border-2 border-dashed border-indigo-200 hover:border-indigo-400 hover:bg-indigo-50/50 text-indigo-500 hover:text-indigo-600 text-xs font-semibold py-2.5 rounded-xl transition-all disabled:opacity-50"
+              >
+                {syncing ? 'Syncing...' : 'Sync Packages from Donations'}
+              </button>
+
+              {syncResult && (
+                <div className="flex items-center gap-2 px-3 py-2 bg-emerald-50 border border-emerald-200 rounded-xl">
+                  <span className="w-2 h-2 bg-emerald-500 rounded-full shrink-0" />
+                  <span className="text-xs font-semibold text-emerald-700">{syncResult}</span>
+                </div>
+              )}
+
+              {/* Package list */}
+              {loadingPackages ? (
+                <div className="flex items-center justify-center py-8">
+                  <div className="w-6 h-6 border-2 border-indigo-600 border-t-transparent rounded-full animate-spin" />
+                </div>
+              ) : packages.length === 0 ? (
+                <div className="text-center py-8">
+                  <p className="text-sm text-gray-400 italic">No packages yet</p>
+                  <p className="text-xs text-gray-400 mt-1">
+                    Packages are auto-created when viewers donate via Sociabuzz
+                  </p>
+                </div>
+              ) : (
+                <div className="space-y-2">
+                  {packages.map((pkg) => (
+                    <div
+                      key={pkg.title}
+                      className={`border rounded-xl px-3 py-3 transition-all ${
+                        pkg.isActive
+                          ? 'bg-white border-gray-200'
+                          : 'bg-gray-50 border-gray-200 opacity-60'
+                      }`}
+                    >
+                      {/* Title + toggle */}
+                      <div className="flex items-start justify-between gap-2 mb-2">
+                        <div className="flex-1 min-w-0">
+                          <p className={`text-sm font-bold truncate ${pkg.isActive ? 'text-gray-900' : 'text-gray-500 line-through'}`}>
+                            {pkg.title}
+                          </p>
+                          {pkg.description && (
+                            <p className="text-xs text-gray-400 mt-0.5 truncate">{pkg.description}</p>
+                          )}
+                        </div>
+                        {/* Active toggle */}
+                        <button
+                          onClick={() => handleTogglePackage(pkg.title, !pkg.isActive)}
+                          className={`shrink-0 w-9 h-5 rounded-full transition-all relative ${
+                            pkg.isActive ? 'bg-emerald-500' : 'bg-gray-300'
+                          }`}
+                          title={pkg.isActive ? 'Disable package' : 'Enable package'}
+                        >
+                          <span
+                            className={`absolute top-0.5 w-4 h-4 bg-white rounded-full shadow transition-all ${
+                              pkg.isActive ? 'left-4' : 'left-0.5'
+                            }`}
+                          />
+                        </button>
+                      </div>
+
+                      {/* Stats row */}
+                      <div className="flex items-center gap-3 text-xs">
+                        <span className="text-gray-500">
+                          RM<span className="font-bold text-gray-700">{pkg.price}</span>
+                        </span>
+                        <span className="text-gray-300">|</span>
+
+                        {/* Match count (editable) */}
+                        {editingMatch === pkg.title ? (
+                          <div className="flex items-center gap-1">
+                            <button
+                              onClick={() => setEditMatchValue((v) => Math.max(1, v - 1))}
+                              className="w-5 h-5 flex items-center justify-center bg-gray-100 border border-gray-200 rounded text-gray-600 text-xs font-bold hover:bg-gray-200"
+                            >
+                              -
+                            </button>
+                            <span className="w-6 text-center font-bold text-indigo-600">{editMatchValue}</span>
+                            <button
+                              onClick={() => setEditMatchValue((v) => Math.min(50, v + 1))}
+                              className="w-5 h-5 flex items-center justify-center bg-gray-100 border border-gray-200 rounded text-gray-600 text-xs font-bold hover:bg-gray-200"
+                            >
+                              +
+                            </button>
+                            <button
+                              onClick={() => handleSaveMatchCount(pkg.title)}
+                              className="text-[10px] bg-indigo-600 text-white px-2 py-0.5 rounded font-semibold ml-1 hover:bg-indigo-700"
+                            >
+                              Save
+                            </button>
+                            <button
+                              onClick={() => setEditingMatch(null)}
+                              className="text-[10px] text-gray-400 hover:text-gray-600 px-1"
+                            >
+                              Cancel
+                            </button>
+                          </div>
+                        ) : (
+                          <button
+                            onClick={() => {
+                              setEditingMatch(pkg.title);
+                              setEditMatchValue(pkg.matchCount);
+                            }}
+                            className="text-indigo-600 font-bold hover:underline"
+                            title="Click to edit match count"
+                          >
+                            {pkg.matchCount} match{pkg.matchCount !== 1 ? 'es' : ''}
+                          </button>
+                        )}
+
+                        <div className="flex-1" />
+
+                        {/* Delete */}
+                        {confirmDelete === pkg.title ? (
+                          <div className="flex items-center gap-1">
+                            <span className="text-[10px] text-red-500 font-medium">Sure?</span>
+                            <button
+                              onClick={() => handleDeletePackage(pkg.title)}
+                              className="text-[10px] bg-red-500 text-white px-2 py-0.5 rounded font-semibold hover:bg-red-600"
+                            >
+                              Delete
+                            </button>
+                            <button
+                              onClick={() => setConfirmDelete(null)}
+                              className="text-[10px] text-gray-400 hover:text-gray-600 px-1"
+                            >
+                              No
+                            </button>
+                          </div>
+                        ) : (
+                          <button
+                            onClick={() => setConfirmDelete(pkg.title)}
+                            className="text-gray-300 hover:text-red-500 transition-colors"
+                            title="Delete package"
+                          >
+                            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                            </svg>
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              {/* Info box */}
+              <div className="bg-gray-50 border border-gray-200 rounded-xl p-3 space-y-2">
+                <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">How it works</p>
+                <ul className="text-xs text-gray-500 space-y-1 leading-relaxed">
+                  <li>Packages are auto-created from Sociabuzz level titles</li>
+                  <li>Each streamer has unique packages based on their Sociabuzz setup</li>
+                  <li>Disabled packages will reject new queue entries</li>
+                  <li>Deleting a package won't affect existing donation history</li>
+                  <li>Use Sync to rebuild packages from past donations</li>
+                </ul>
               </div>
             </div>
           )}

@@ -43,6 +43,13 @@ service cloud.firestore {
         allow read, write: if request.auth != null
           && get(/databases/$(database)/documents/users/$(username)).data.uid == request.auth.uid;
       }
+
+      // Packages — public read (for display), owner write
+      match /packages/{packageId} {
+        allow read: if true;
+        allow write: if request.auth != null
+          && get(/databases/$(database)/documents/users/$(username)).data.uid == request.auth.uid;
+      }
     }
   }
 }

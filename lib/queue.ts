@@ -30,6 +30,7 @@ export interface GamePlayer {
   timestamp: Timestamp | null;
   player_id?: string;
   transaction_id?: string;
+  packageTitle?: string;
 }
 
 export const MAX_GAME_SLOTS = 4;
@@ -71,6 +72,7 @@ export async function addPlayerToQueue(
   orderDate?: string,
   player_id?: string,
   transaction_id?: string,
+  packageTitle?: string,
 ): Promise<void> {
   if (games <= 0) return;
   const date = orderDate ?? formatOrderDate();
@@ -78,6 +80,7 @@ export async function addPlayerToQueue(
   const extras: Record<string, string> = {};
   if (player_id) extras.player_id = player_id;
   if (transaction_id) extras.transaction_id = transaction_id;
+  if (packageTitle) extras.packageTitle = packageTitle;
 
   // Check if player already exists in queue (any status)
   const existingSnap = await getDocs(
@@ -88,6 +91,7 @@ export async function addPlayerToQueue(
     await updateDoc(existing.ref, {
       gamesLeft: existing.data().gamesLeft + games,
       totalGames: existing.data().totalGames + games,
+      ...(ign ? { ign } : {}),  // update IGN if a new one was parsed
       ...extras,
     });
     return;

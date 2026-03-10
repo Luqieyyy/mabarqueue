@@ -1,9 +1,10 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { addDoc, collection, serverTimestamp } from 'firebase/firestore';
-import { parseMessage, extractGamesFromPackage } from '../../../../lib/donation';
+import { parseMessage, extractGamesFromPackage, extractLevelInfo } from '../../../../lib/donation';
 import { addPlayerToQueue, formatOrderDate } from '../../../../lib/queue';
 import { db } from '../../../../lib/firebase';
 import { getRates, getFeatures, getWebhookToken, convertAmountToGames } from '../../../../lib/settings';
+import { ensurePackageExists } from '../../../../lib/packages';
 
 // ─── Body Parser ──────────────────────────────────────────────────────────────
 
@@ -178,7 +179,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ uid
       console.warn(`[Sociabuzz/${uid}] ✗ No ML ID in message: "${message}"`);
       await addDoc(collection(db, 'users', uid, 'donations'), {
         donorName, amount, ign: null, player_id: null, gamesAdded: 0,
-        message, transaction_id: transactionId, levelTitle,
+        message, transaction_id: transactionId, packageTitle: levelTitle,
         status: 'failed_parse', timestamp: serverTimestamp(),
       });
       return NextResponse.json({
@@ -190,15 +191,59 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ uid
     const { player_id, ign: parsedIgn } = parsed;
     const ign = parsedIgn || donorName;
 
-    // Determine games: level.title first, then amount tiers
-    let games = extractGamesFromPackage(levelTitle);
-    let gameSource = 'package';
+    // ─── Dynamic Package Detection ─────────────────────────────────────
+    // Extract full level info from webhook body
+    const levelInfo = extractLevelInfo(body);
+    let games: number | null = null;
+    let gameSource = 'amount';
+    let packageTitle: string | null = levelTitle;
+
+    if (levelInfo) {
+      // Auto-create or fetch existing package
+      const { pkg } = await ensurePackageExists(
+        uid,
+        levelInfo.title,
+        levelInfo.price || amount,
+        levelInfo.description,
+      );
+
+      packageTitle = levelInfo.title;
+
+      // Check if package is active
+      if (!pkg.isActive) {
+        console.warn(`[Sociabuzz/${uid}] ✗ Package "${levelInfo.title}" is disabled`);
+        await addDoc(collection(db, 'users', uid, 'donations'), {
+          donorName, amount, ign, player_id, gamesAdded: 0,
+          message, transaction_id: transactionId, packageTitle,
+          status: 'package_disabled', timestamp: serverTimestamp(),
+        });
+        return NextResponse.json({
+          success: true,
+          warning: `Package "${levelInfo.title}" is disabled`,
+        });
+      }
+
+      // Use package matchCount for games
+      games = pkg.matchCount;
+      gameSource = 'package';
+    }
+
+    // Fallback: try extracting from title text, then amount tiers
+    if (games === null) {
+      games = extractGamesFromPackage(levelTitle);
+      if (games !== null) gameSource = 'package_title';
+    }
     if (games === null) {
       games = convertAmountToGames(amount, rates);
       gameSource = 'amount';
     }
 
     if (games === 0) {
+      await addDoc(collection(db, 'users', uid, 'donations'), {
+        donorName, amount, ign, player_id, gamesAdded: 0,
+        message, transaction_id: transactionId, packageTitle,
+        status: 'no_games', timestamp: serverTimestamp(),
+      });
       return NextResponse.json({ success: true, warning: `Could not determine games for RM${amount}` });
     }
 
@@ -210,18 +255,18 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ uid
     }
 
     await Promise.all([
-      addPlayerToQueue(uid, donorName, ign, games, orderDate, player_id, transactionId),
+      addPlayerToQueue(uid, donorName, ign, games, orderDate, player_id, transactionId, packageTitle ?? undefined),
       addDoc(collection(db, 'users', uid, 'donations'), {
         donorName, amount, ign, player_id, gamesAdded: games, gameSource,
-        message, transaction_id: transactionId, levelTitle,
+        message, transaction_id: transactionId, packageTitle,
         status: 'success', timestamp: serverTimestamp(),
       }),
     ]);
 
-    console.log(`[Sociabuzz/${uid}] ✓ ${donorName} → "${ign}" (ML: ${player_id}, ${games} games)`);
+    console.log(`[Sociabuzz/${uid}] ✓ ${donorName} → "${ign}" (ML: ${player_id}, ${games} games, pkg: "${packageTitle}")`);
     console.log(`━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n`);
 
-    return NextResponse.json({ success: true, donorName, ign, player_id, games, amount, transaction_id: transactionId });
+    return NextResponse.json({ success: true, donorName, ign, player_id, games, amount, packageTitle, transaction_id: transactionId });
 
   } catch (error) {
     console.error(`[Sociabuzz/${uid}] ✗ Error:`, error);

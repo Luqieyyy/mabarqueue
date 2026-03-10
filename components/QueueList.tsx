@@ -44,16 +44,15 @@ export default function QueueList({
           <div className="flex items-center gap-2">
             <span className="text-[11px] font-mono text-gray-400 w-5 shrink-0">{index + 1}.</span>
             <div className="flex-1 min-w-0">
-              <div className="flex items-center gap-1.5 flex-wrap">
-                <p className="font-semibold text-gray-900 text-sm truncate">{player.ign}</p>
-                {player.player_id && (
-                  <span className="text-[10px] font-mono text-gray-400 bg-gray-100 px-1.5 py-0.5 rounded shrink-0">
+              {player.player_id ? (
+                <>
+                  <p className="font-black text-gray-900 text-sm font-mono leading-tight truncate">
                     {player.player_id}
-                  </span>
-                )}
-              </div>
-              {player.username !== player.ign && (
-                <p className="text-[11px] text-gray-400 truncate">{player.username}</p>
+                  </p>
+                  <p className="text-[11px] text-gray-500 font-semibold truncate">{player.ign}</p>
+                </>
+              ) : (
+                <p className="font-semibold text-gray-900 text-sm truncate">{player.ign}</p>
               )}
             </div>
             {player.orderDate && (
