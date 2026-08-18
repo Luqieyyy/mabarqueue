@@ -1,10 +1,10 @@
 'use client';
 
 import type { GamePlayer } from '../lib/queue';
-import { MAX_GAME_SLOTS } from '../lib/queue';
 
 interface Props {
   players: GamePlayer[];
+  maxSlots: number;
   loading: boolean;
   onFinishGame: () => void;
   onSkip: (id: string) => void;
@@ -16,6 +16,7 @@ interface Props {
 
 export default function CurrentPlayerPanel({
   players,
+  maxSlots,
   loading,
   onFinishGame,
   onSkip,
@@ -24,7 +25,7 @@ export default function CurrentPlayerPanel({
   onIncrease,
   onDecrease,
 }: Props) {
-  const emptySlots = MAX_GAME_SLOTS - players.length;
+  const emptySlots = Math.max(0, maxSlots - players.length);
 
   return (
     <div className="bg-white border border-gray-200 rounded-2xl shadow-sm p-5 flex flex-col gap-4">
@@ -35,7 +36,7 @@ export default function CurrentPlayerPanel({
           <h2 className="text-xs font-bold text-gray-700 uppercase tracking-widest">In Game</h2>
         </div>
         <span className="text-xs text-gray-400 font-mono">
-          {players.length}/{MAX_GAME_SLOTS} viewers
+          {players.length}/{maxSlots} viewers
         </span>
       </div>
 

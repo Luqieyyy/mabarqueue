@@ -38,9 +38,13 @@ service cloud.firestore {
           && get(/databases/$(database)/documents/users/$(username)).data.uid == request.auth.uid;
       }
 
-      // Settings — owner only
+      // Settings — owner only, except "game" which is public read
+      // (needed by the public /queue and /overlay pages to show the right slot count)
       match /settings/{settingId} {
-        allow read, write: if request.auth != null
+        allow read: if settingId == 'game'
+          || (request.auth != null
+              && get(/databases/$(database)/documents/users/$(username)).data.uid == request.auth.uid);
+        allow write: if request.auth != null
           && get(/databases/$(database)/documents/users/$(username)).data.uid == request.auth.uid;
       }
 

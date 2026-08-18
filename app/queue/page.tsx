@@ -2,10 +2,11 @@
 
 import { Suspense, useEffect, useState } from 'react';
 import { useSearchParams } from 'next/navigation';
-import { collection, limit, onSnapshot, orderBy, query, where } from 'firebase/firestore';
+import { collection, doc, limit, onSnapshot, orderBy, query, where } from 'firebase/firestore';
 import { db } from '../../lib/firebase';
 import type { GamePlayer } from '../../lib/queue';
 import type { AlbumEntry } from '../../components/CommentAlbumFeed';
+import { getGameDefinition, DEFAULT_GAME, type GameId } from '../../lib/games';
 
 const GAME_DURATION_MIN = 15;
 
@@ -34,13 +35,23 @@ function QueueContent() {
   const [currentPlayers, setCurrentPlayers] = useState<GamePlayer[]>([]);
   const [queue, setQueue] = useState<GamePlayer[]>([]);
   const [albumEntries, setAlbumEntries] = useState<AlbumEntry[]>([]);
+  const [activeGame, setActiveGame] = useState<GameId>(DEFAULT_GAME);
   const [ready, setReady] = useState(false);
+
+  useEffect(() => {
+    if (!uid) return;
+    const unsub = onSnapshot(doc(db, 'users', uid, 'settings', 'game'), (snap) => {
+      const game = (snap.exists() ? (snap.data().activeGame as GameId | undefined) : undefined) ?? DEFAULT_GAME;
+      setActiveGame(game);
+    });
+    return () => unsub();
+  }, [uid]);
 
   useEffect(() => {
     if (!uid) { setReady(true); return; }
     const queueRef = collection(db, 'users', uid, 'queue');
     const unsubGame = onSnapshot(
-      query(queueRef, where('status', '==', 'playing'), orderBy('timestamp', 'asc')),
+      query(queueRef, where('status', '==', 'playing'), where('game', '==', activeGame), orderBy('timestamp', 'asc')),
       (snap) => {
         setCurrentPlayers(snap.docs.map((d) => ({ id: d.id, ...d.data() }) as GamePlayer));
         setReady(true);
@@ -48,7 +59,7 @@ function QueueContent() {
       (err) => { console.error(err); setReady(true); },
     );
     const unsubQueue = onSnapshot(
-      query(queueRef, where('status', '==', 'waiting'), orderBy('timestamp', 'asc')),
+      query(queueRef, where('status', '==', 'waiting'), where('game', '==', activeGame), orderBy('timestamp', 'asc')),
       (snap) => setQueue(snap.docs.map((d) => ({ id: d.id, ...d.data() }) as GamePlayer)),
     );
     const unsubAlbum = onSnapshot(
@@ -56,7 +67,7 @@ function QueueContent() {
       (snap) => setAlbumEntries(snap.docs.map((d) => ({ id: d.id, ...d.data() }) as AlbumEntry)),
     );
     return () => { unsubGame(); unsubQueue(); unsubAlbum(); };
-  }, [uid]);
+  }, [uid, activeGame]);
 
   if (!ready) {
     return (
@@ -74,8 +85,10 @@ function QueueContent() {
     );
   }
 
-  const upNext = queue.slice(0, 4);
-  const remaining = queue.slice(4);
+  const gameDef = getGameDefinition(activeGame);
+  const maxSlots = gameDef.slotCount;
+  const upNext = queue.slice(0, maxSlots);
+  const remaining = queue.slice(maxSlots);
   const totalWaitMins = currentPlayers.reduce((s, p) => s + p.gamesLeft, 0) * GAME_DURATION_MIN;
 
   return (
@@ -104,6 +117,9 @@ function QueueContent() {
             M
           </div>
           <span className="text-sm font-black tracking-widest text-white uppercase">Mabar Queue</span>
+          <span className="text-[10px] font-bold text-violet-300 bg-violet-500/10 border border-violet-500/20 px-2 py-0.5 rounded-full uppercase tracking-widest">
+            {gameDef.label}
+          </span>
         </div>
 
         <div className="flex items-center gap-4 text-xs">
@@ -112,7 +128,7 @@ function QueueContent() {
             LIVE
           </span>
           <span className="text-gray-600">|</span>
-          <span className="text-gray-400">{currentPlayers.length}<span className="text-gray-700">/4</span> playing</span>
+          <span className="text-gray-400">{currentPlayers.length}<span className="text-gray-700">/{maxSlots}</span> playing</span>
           <span className="text-gray-600">|</span>
           <span className="text-gray-400">{queue.length} waiting</span>
         </div>
@@ -325,7 +341,7 @@ function QueueContent() {
             Nak join? Donate via Sociabuzz
           </p>
           <p className="text-sm text-gray-500">
-            Sertakan <span className="font-mono font-bold text-white">ID: [ML_ID] [IGN]</span> dalam message
+            Sertakan <span className="font-mono font-bold text-white">{gameDef.idLabel}: [ID] [IGN]</span> dalam message
           </p>
           <div className="flex justify-center gap-4 mt-2 flex-wrap text-xs text-gray-600">
             <span>RM4 = 1 game</span>

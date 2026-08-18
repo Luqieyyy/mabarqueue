@@ -7,9 +7,10 @@ interface Props {
   currentPlayers: GamePlayer[];
   queue: GamePlayer[];
   albumEntries: AlbumEntry[];
+  maxSlots: number;
 }
 
-export default function LivePreview({ currentPlayers, queue, albumEntries }: Props) {
+export default function LivePreview({ currentPlayers, queue, albumEntries, maxSlots }: Props) {
   const isEmpty = currentPlayers.length === 0 && queue.length === 0;
 
   return (
@@ -49,7 +50,7 @@ export default function LivePreview({ currentPlayers, queue, albumEntries }: Pro
                 <span className="bg-emerald-500 text-white text-[9px] font-black uppercase tracking-widest px-2.5 py-1 rounded-full">
                   In Game
                 </span>
-                <span className="text-[11px] text-gray-400">{currentPlayers.length}/4 slots</span>
+                <span className="text-[11px] text-gray-400">{currentPlayers.length}/{maxSlots} slots</span>
               </div>
               <div className="space-y-2">
                 {currentPlayers.length === 0 ? (

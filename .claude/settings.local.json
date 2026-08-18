@@ -3,7 +3,13 @@
     "allow": [
       "Bash(npm install framer-motion --legacy-peer-deps)",
       "Bash(npm install)",
-      "Bash(npm install --save-dev @types/react @types/react-dom @types/node)"
+      "Bash(npm install --save-dev @types/react @types/react-dom @types/node)",
+      "Bash(npx tsc *)",
+      "Bash(npm run *)",
+      "Bash(curl -s -o /dev/null -w \"/ -> %{http_code}\\\\n\" http://localhost:3000/)",
+      "Bash(curl -s -o /dev/null -w \"/login -> %{http_code}\\\\n\" http://localhost:3000/login)",
+      "Bash(curl -s -o /dev/null -w \"/queue -> %{http_code}\\\\n\" http://localhost:3000/queue)",
+      "Bash(curl -s -o /dev/null -w \"/overlay -> %{http_code}\\\\n\" http://localhost:3000/overlay)"
     ]
   }
 }

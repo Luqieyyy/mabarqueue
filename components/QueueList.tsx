@@ -1,11 +1,11 @@
 'use client';
 
 import type { GamePlayer } from '../lib/queue';
-import { MAX_GAME_SLOTS } from '../lib/queue';
 
 interface Props {
   players: GamePlayer[];
   currentCount: number; // number of players currently in-game (to know if slot is free)
+  maxSlots: number;
   onIncrease?: (id: string) => void;
   onDecrease?: (id: string) => void;
   onRemove?: (id: string) => void;
@@ -16,13 +16,14 @@ interface Props {
 export default function QueueList({
   players,
   currentCount,
+  maxSlots,
   onIncrease,
   onDecrease,
   onRemove,
   onSkip,
   onPromote,
 }: Props) {
-  const isFull = currentCount >= MAX_GAME_SLOTS;
+  const isFull = currentCount >= maxSlots;
   const isDashboard = !!(onIncrease || onDecrease || onRemove || onSkip || onPromote);
 
   if (players.length === 0) {

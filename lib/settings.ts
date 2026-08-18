@@ -1,5 +1,6 @@
 import { doc, getDoc, setDoc } from 'firebase/firestore';
 import { db } from './firebase';
+import { DEFAULT_GAME, type GameId } from './games';
 
 export interface RateTier {
   amount: number;
@@ -8,6 +9,10 @@ export interface RateTier {
 
 export interface FeatureSettings {
   commentAlbum: boolean;
+}
+
+export interface GameSettings {
+  activeGame: GameId;
 }
 
 export const DEFAULT_TIERS: RateTier[] = [
@@ -40,6 +45,16 @@ export async function getFeatures(uid: string): Promise<FeatureSettings> {
 
 export async function saveFeatures(uid: string, features: FeatureSettings): Promise<void> {
   await setDoc(settingsDoc(uid, 'features'), features, { merge: true });
+}
+
+export async function getActiveGame(uid: string): Promise<GameId> {
+  const snap = await getDoc(settingsDoc(uid, 'game'));
+  if (!snap.exists()) return DEFAULT_GAME;
+  return (snap.data().activeGame as GameId | undefined) ?? DEFAULT_GAME;
+}
+
+export async function saveActiveGame(uid: string, game: GameId): Promise<void> {
+  await setDoc(settingsDoc(uid, 'game'), { activeGame: game }, { merge: true });
 }
 
 export async function getWebhookToken(uid: string): Promise<string | null> {

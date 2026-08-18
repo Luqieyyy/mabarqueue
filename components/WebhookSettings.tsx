@@ -20,6 +20,8 @@ import {
   syncPackages,
   type StreamerPackage,
 } from '../lib/packages';
+import { getActiveGame, saveActiveGame } from '../lib/settings';
+import { GAMES, DEFAULT_GAME, type GameId, type GameDefinition } from '../lib/games';
 
 interface Props {
   uid: string;
@@ -27,10 +29,10 @@ interface Props {
   onClose: () => void;
 }
 
-type Tab = 'webhook' | 'rates' | 'packages' | 'features';
+type Tab = 'game' | 'webhook' | 'rates' | 'packages' | 'features';
 
 export default function WebhookSettings({ uid, isOpen, onClose }: Props) {
-  const [tab, setTab] = useState<Tab>('webhook');
+  const [tab, setTab] = useState<Tab>('game');
 
   // ── Webhook tab state ──
   const [token, setToken] = useState('');
@@ -57,6 +59,9 @@ export default function WebhookSettings({ uid, isOpen, onClose }: Props) {
   const [features, setFeatures] = useState<FeatureSettings>({ commentAlbum: false });
   const [savingFeatures, setSavingFeatures] = useState(false);
   const [savedFeatures, setSavedFeatures] = useState(false);
+  const [activeGame, setActiveGame] = useState<GameId>(DEFAULT_GAME);
+  const [savingGame, setSavingGame] = useState(false);
+  const [savedGame, setSavedGame] = useState(false);
 
   useEffect(() => {
     if (typeof window !== 'undefined') {
@@ -65,6 +70,7 @@ export default function WebhookSettings({ uid, isOpen, onClose }: Props) {
     getWebhookToken(uid).then((t) => { if (t) setToken(t); });
     getRates(uid).then(setTiers);
     getFeatures(uid).then(setFeatures);
+    getActiveGame(uid).then(setActiveGame);
   }, [uid]);
 
   const loadPackages = useCallback(async () => {
@@ -165,6 +171,18 @@ export default function WebhookSettings({ uid, isOpen, onClose }: Props) {
     }
   };
 
+  // ── Game handlers ──
+  const handleSaveGame = async () => {
+    setSavingGame(true);
+    try {
+      await saveActiveGame(uid, activeGame);
+      setSavedGame(true);
+      setTimeout(() => setSavedGame(false), 3000);
+    } finally {
+      setSavingGame(false);
+    }
+  };
+
   // ── Features handlers ──
   const handleSaveFeatures = async () => {
     setSavingFeatures(true);
@@ -208,7 +226,7 @@ export default function WebhookSettings({ uid, isOpen, onClose }: Props) {
 
           {/* Tabs */}
           <div className="flex bg-gray-100 rounded-xl p-1 mb-5">
-            {(['webhook', 'rates', 'packages', 'features'] as Tab[]).map((t) => (
+            {(['game', 'webhook', 'rates', 'packages', 'features'] as Tab[]).map((t) => (
               <button
                 key={t}
                 onClick={() => setTab(t)}
@@ -218,10 +236,61 @@ export default function WebhookSettings({ uid, isOpen, onClose }: Props) {
                     : 'text-gray-500 hover:text-gray-700'
                 }`}
               >
-                {t === 'webhook' ? 'Webhook' : t === 'rates' ? 'Rates' : t === 'packages' ? 'Packages' : 'Features'}
+                {t === 'game' ? 'Game' : t === 'webhook' ? 'Webhook' : t === 'rates' ? 'Rates' : t === 'packages' ? 'Packages' : 'Features'}
               </button>
             ))}
           </div>
+
+          {/* ── TAB: GAME ── */}
+          {tab === 'game' && (
+            <div className="space-y-4">
+              <p className="text-xs text-gray-500 leading-relaxed">
+                Pilih game yang kau sedang stream. Bilangan slot, cara parse ID pemain, dan Comment Album akan ikut game ni.
+              </p>
+
+              <div className="space-y-2">
+                {Object.values(GAMES)
+                  .filter((g): g is GameDefinition => !!g)
+                  .map((g) => (
+                    <button
+                      key={g.id}
+                      onClick={() => setActiveGame(g.id)}
+                      className={`w-full flex items-center justify-between border rounded-xl px-4 py-3 transition-all text-left ${
+                        activeGame === g.id
+                          ? 'bg-indigo-50 border-indigo-300'
+                          : 'bg-white border-gray-200 hover:border-gray-300'
+                      }`}
+                    >
+                      <div>
+                        <p className={`text-sm font-bold ${activeGame === g.id ? 'text-indigo-700' : 'text-gray-800'}`}>
+                          {g.label}
+                        </p>
+                        <p className="text-xs text-gray-400 mt-0.5">{g.slotCount} viewer slots · {g.idLabel}</p>
+                      </div>
+                      {activeGame === g.id && (
+                        <span className="w-5 h-5 rounded-full bg-indigo-600 flex items-center justify-center text-white text-xs shrink-0">
+                          ✓
+                        </span>
+                      )}
+                    </button>
+                  ))}
+              </div>
+
+              <div className="bg-amber-50 border border-amber-200 rounded-xl p-3">
+                <p className="text-[11px] text-amber-700 leading-relaxed">
+                  Queue & Hutang untuk game lain akan tersimpan (tak hilang) — papar balik bila kau switch semula. Data setiap game kekal berasingan.
+                </p>
+              </div>
+
+              <button
+                onClick={handleSaveGame}
+                disabled={savingGame}
+                className="w-full bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white font-bold py-2.5 rounded-xl text-sm transition-all"
+              >
+                {savingGame ? 'Saving...' : savedGame ? '✓ Saved!' : 'Save Game'}
+              </button>
+            </div>
+          )}
 
           {/* ── TAB: WEBHOOK ── */}
           {tab === 'webhook' && (
@@ -613,31 +682,40 @@ export default function WebhookSettings({ uid, isOpen, onClose }: Props) {
           {/* ── TAB: FEATURES ── */}
           {tab === 'features' && (
             <div className="space-y-4">
-              {/* Comment Album */}
-              <div className="bg-gray-50 border border-gray-200 rounded-xl p-4">
+              {/* Comment Album — Mobile Legends only */}
+              <div className={`bg-gray-50 border border-gray-200 rounded-xl p-4 ${activeGame !== 'ml' ? 'opacity-60' : ''}`}>
                 <div className="flex items-start justify-between gap-3 mb-3">
                   <div>
                     <p className="text-sm font-bold text-gray-800">Comment Album</p>
                     <p className="text-xs text-gray-500 mt-0.5 leading-relaxed">
                       Viewers can donate to comment on your ML gallery — they provide Game ID + IGN.
                     </p>
+                    {activeGame !== 'ml' && (
+                      <p className="text-[11px] text-amber-600 font-semibold mt-1">
+                        Comment Album is only available for Mobile Legends.
+                      </p>
+                    )}
                   </div>
                   {/* Toggle */}
                   <button
-                    onClick={() => setFeatures((f) => ({ ...f, commentAlbum: !f.commentAlbum }))}
+                    onClick={() => activeGame === 'ml' && setFeatures((f) => ({ ...f, commentAlbum: !f.commentAlbum }))}
+                    disabled={activeGame !== 'ml'}
+                    title={activeGame !== 'ml' ? 'Comment Album is only available for Mobile Legends' : undefined}
                     className={`shrink-0 w-11 h-6 rounded-full transition-all relative ${
-                      features.commentAlbum ? 'bg-indigo-600' : 'bg-gray-300'
+                      activeGame !== 'ml' ? 'cursor-not-allowed' : ''
+                    } ${
+                      features.commentAlbum && activeGame === 'ml' ? 'bg-indigo-600' : 'bg-gray-300'
                     }`}
                   >
                     <span
                       className={`absolute top-0.5 w-5 h-5 bg-white rounded-full shadow transition-all ${
-                        features.commentAlbum ? 'left-5' : 'left-0.5'
+                        features.commentAlbum && activeGame === 'ml' ? 'left-5' : 'left-0.5'
                       }`}
                     />
                   </button>
                 </div>
 
-                {features.commentAlbum && (
+                {features.commentAlbum && activeGame === 'ml' && (
                   <div className="border-t border-gray-200 pt-3 space-y-2">
                     <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">Message format when ON</p>
                     <div className="bg-white border border-gray-200 rounded-lg p-2.5 font-mono text-xs space-y-1">

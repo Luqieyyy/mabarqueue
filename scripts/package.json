@@ -1,0 +1,8 @@
+{
+  "name": "mabarqueue-scripts",
+  "private": true,
+  "description": "One-off maintenance scripts, run manually — not deployed anywhere.",
+  "dependencies": {
+    "firebase-admin": "^12.6.0"
+  }
+}

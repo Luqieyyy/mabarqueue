@@ -4,6 +4,7 @@
       "collectionGroup": "queue",
       "queryScope": "COLLECTION",
       "fields": [
+        { "fieldPath": "game", "order": "ASCENDING" },
         { "fieldPath": "status", "order": "ASCENDING" },
         { "fieldPath": "timestamp", "order": "ASCENDING" }
       ]
@@ -13,6 +14,14 @@
       "queryScope": "COLLECTION",
       "fields": [
         { "fieldPath": "username", "order": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "donations",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "game", "order": "ASCENDING" },
+        { "fieldPath": "timestamp", "order": "DESCENDING" }
       ]
     }
   ],

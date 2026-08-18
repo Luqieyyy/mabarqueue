@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { collection, limit, onSnapshot, orderBy, query, where } from 'firebase/firestore';
+import { collection, doc, limit, onSnapshot, orderBy, query, where } from 'firebase/firestore';
 import { db } from '../../lib/firebase';
 import { useAuth } from '../../lib/auth';
 import {
@@ -24,6 +24,7 @@ import {
   promoteQueuePlayerToGame,
 } from '../../lib/queue';
 import type { GamePlayer } from '../../lib/queue';
+import { getGameDefinition, DEFAULT_GAME, type GameId } from '../../lib/games';
 import Navbar from '../../components/Navbar';
 import CurrentPlayerPanel from '../../components/CurrentPlayerPanel';
 import QueueList from '../../components/QueueList';
@@ -50,10 +51,21 @@ export default function DashboardPage() {
   const [debugResponse, setDebugResponse] = useState('');
   const [debugLoading, setDebugLoading] = useState(false);
   const [firestoreError, setFirestoreError] = useState('');
+  const [activeGame, setActiveGame] = useState<GameId>(DEFAULT_GAME);
 
   useEffect(() => {
     if (!authLoading && !user) router.push('/login');
   }, [user, authLoading, router]);
+
+  // Active game setting — determines which game's queue/donations show below
+  useEffect(() => {
+    if (!user || !username) return;
+    const unsub = onSnapshot(doc(db, 'users', username, 'settings', 'game'), (snap) => {
+      const game = (snap.exists() ? (snap.data().activeGame as GameId | undefined) : undefined) ?? DEFAULT_GAME;
+      setActiveGame(game);
+    });
+    return () => unsub();
+  }, [user, username]);
 
   useEffect(() => {
     if (!user || !username) return;
@@ -69,24 +81,24 @@ export default function DashboardPage() {
       }
     };
 
-    // Unified queue — 3 filtered listeners by status
+    // Unified queue — 3 filtered listeners by status, scoped to the active game
     const unsubPlaying = onSnapshot(
-      query(queueRef, where('status', '==', 'playing'), orderBy('timestamp', 'asc')),
+      query(queueRef, where('status', '==', 'playing'), where('game', '==', activeGame), orderBy('timestamp', 'asc')),
       (snap) => { setCurrentPlayers(snap.docs.map((d) => ({ id: d.id, ...d.data() }) as GamePlayer)); setFirestoreError(''); },
       onErr,
     );
     const unsubWaiting = onSnapshot(
-      query(queueRef, where('status', '==', 'waiting'), orderBy('timestamp', 'asc')),
+      query(queueRef, where('status', '==', 'waiting'), where('game', '==', activeGame), orderBy('timestamp', 'asc')),
       (snap) => setWaitingPlayers(snap.docs.map((d) => ({ id: d.id, ...d.data() }) as GamePlayer)),
       onErr,
     );
     const unsubSkipped = onSnapshot(
-      query(queueRef, where('status', '==', 'skipped'), orderBy('timestamp', 'asc')),
+      query(queueRef, where('status', '==', 'skipped'), where('game', '==', activeGame), orderBy('timestamp', 'asc')),
       (snap) => setHutangPlayers(snap.docs.map((d) => ({ id: d.id, ...d.data() }) as GamePlayer)),
       onErr,
     );
     const unsubDonations = onSnapshot(
-      query(collection(db, 'users', uid, 'donations'), orderBy('timestamp', 'desc'), limit(20)),
+      query(collection(db, 'users', uid, 'donations'), where('game', '==', activeGame), orderBy('timestamp', 'desc'), limit(20)),
       (snap) => setDonations(snap.docs.map((d) => ({ id: d.id, ...d.data() }) as Donation)),
     );
     const unsubAlbum = onSnapshot(
@@ -97,7 +109,7 @@ export default function DashboardPage() {
     return () => {
       unsubPlaying(); unsubWaiting(); unsubSkipped(); unsubDonations(); unsubAlbum();
     };
-  }, [user, username]);
+  }, [user, username, activeGame]);
 
   async function sendDebugWebhook() {
     if (!user) return;
@@ -146,6 +158,7 @@ export default function DashboardPage() {
   }
 
   const uid = username; // Firestore doc ID = email prefix (e.g. "luqmanbahrin2004")
+  const maxSlots = getGameDefinition(activeGame).slotCount;
   const totalPlayers = waitingPlayers.length + currentPlayers.length;
   const totalGames =
     waitingPlayers.reduce((s, p) => s + p.gamesLeft, 0) +
@@ -213,6 +226,7 @@ export default function DashboardPage() {
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
           <CurrentPlayerPanel
             players={currentPlayers}
+            maxSlots={maxSlots}
             loading={loading}
             onFinishGame={() => run(() => finishGame(uid), 'Game finished — all viewers −1')}
             onSkip={(id) => run(() => skipCurrentPlayer(uid, id), 'Player moved to Hutang')}
@@ -235,6 +249,7 @@ export default function DashboardPage() {
               <QueueList
                 players={waitingPlayers}
                 currentCount={currentPlayers.length}
+                maxSlots={maxSlots}
                 onIncrease={(id) => run(() => increasePlayerGames(uid, id), 'Games +1')}
                 onDecrease={(id) => run(() => decreasePlayerGames(uid, id), 'Games −1')}
                 onSkip={(id) => run(() => skipQueuePlayer(uid, id), 'Moved to Hutang')}
@@ -262,7 +277,7 @@ export default function DashboardPage() {
         </div>
 
         <CommentAlbumFeed entries={albumEntries} />
-        <LivePreview currentPlayers={currentPlayers} queue={waitingPlayers} albumEntries={albumEntries} />
+        <LivePreview currentPlayers={currentPlayers} queue={waitingPlayers} albumEntries={albumEntries} maxSlots={maxSlots} />
 
         {/* DEBUG */}
         <div className="bg-yellow-50 border border-yellow-300 rounded-2xl p-4 space-y-3">

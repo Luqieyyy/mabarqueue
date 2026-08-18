@@ -2,9 +2,10 @@
 
 import { Suspense, useEffect, useState } from 'react';
 import { useSearchParams } from 'next/navigation';
-import { collection, onSnapshot, orderBy, query, where } from 'firebase/firestore';
+import { collection, doc, onSnapshot, orderBy, query, where } from 'firebase/firestore';
 import { db } from '../../lib/firebase';
 import type { GamePlayer } from '../../lib/queue';
+import { getGameDefinition, DEFAULT_GAME, type GameId } from '../../lib/games';
 
 const MAX_QUEUE_ROWS = 8;
 
@@ -13,20 +14,30 @@ function OverlayContent() {
   const uid = searchParams.get('uid');
   const [currentPlayers, setCurrentPlayers] = useState<GamePlayer[]>([]);
   const [queue, setQueue] = useState<GamePlayer[]>([]);
+  const [activeGame, setActiveGame] = useState<GameId>(DEFAULT_GAME);
+
+  useEffect(() => {
+    if (!uid) return;
+    const unsub = onSnapshot(doc(db, 'users', uid, 'settings', 'game'), (snap) => {
+      const game = (snap.exists() ? (snap.data().activeGame as GameId | undefined) : undefined) ?? DEFAULT_GAME;
+      setActiveGame(game);
+    });
+    return () => unsub();
+  }, [uid]);
 
   useEffect(() => {
     if (!uid) return;
     const queueRef = collection(db, 'users', uid, 'queue');
     const unsubGame = onSnapshot(
-      query(queueRef, where('status', '==', 'playing'), orderBy('timestamp', 'asc')),
+      query(queueRef, where('status', '==', 'playing'), where('game', '==', activeGame), orderBy('timestamp', 'asc')),
       (snap) => setCurrentPlayers(snap.docs.map((d) => ({ id: d.id, ...d.data() }) as GamePlayer)),
     );
     const unsubQueue = onSnapshot(
-      query(queueRef, where('status', '==', 'waiting'), orderBy('timestamp', 'asc')),
+      query(queueRef, where('status', '==', 'waiting'), where('game', '==', activeGame), orderBy('timestamp', 'asc')),
       (snap) => setQueue(snap.docs.map((d) => ({ id: d.id, ...d.data() }) as GamePlayer)),
     );
     return () => { unsubGame(); unsubQueue(); };
-  }, [uid]);
+  }, [uid, activeGame]);
 
   if (!uid) return (
     <div style={{ color: '#888', fontFamily: 'monospace', padding: '20px', fontSize: '12px' }}>
@@ -37,8 +48,9 @@ function OverlayContent() {
   // Hide overlay when nothing is queued
   if (currentPlayers.length === 0 && queue.length === 0) return null;
 
-  const nextTurn = queue.slice(0, 4);
-  const remaining = queue.slice(4, 4 + MAX_QUEUE_ROWS);
+  const maxSlots = getGameDefinition(activeGame).slotCount;
+  const nextTurn = queue.slice(0, maxSlots);
+  const remaining = queue.slice(maxSlots, maxSlots + MAX_QUEUE_ROWS);
 
   return (
     <div
@@ -160,7 +172,7 @@ function OverlayContent() {
         )}
 
         {/* More indicator */}
-        {queue.length > 4 + MAX_QUEUE_ROWS && (
+        {queue.length > maxSlots + MAX_QUEUE_ROWS && (
           <div
             style={{
               background: '#f8f8f8',
@@ -171,7 +183,7 @@ function OverlayContent() {
               color: '#888888',
             }}
           >
-            +{queue.length - 4 - MAX_QUEUE_ROWS} more in queue
+            +{queue.length - maxSlots - MAX_QUEUE_ROWS} more in queue
           </div>
         )}
       </div>

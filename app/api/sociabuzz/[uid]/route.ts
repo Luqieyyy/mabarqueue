@@ -1,10 +1,11 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { addDoc, collection, serverTimestamp } from 'firebase/firestore';
-import { parseMessage, extractGamesFromPackage, extractLevelInfo } from '../../../../lib/donation';
+import { extractGamesFromPackage, extractLevelInfo } from '../../../../lib/donation';
 import { addPlayerToQueue, formatOrderDate } from '../../../../lib/queue';
 import { db } from '../../../../lib/firebase';
-import { getRates, getFeatures, getWebhookToken, convertAmountToGames } from '../../../../lib/settings';
+import { getRates, getFeatures, getWebhookToken, getActiveGame, convertAmountToGames } from '../../../../lib/settings';
 import { ensurePackageExists } from '../../../../lib/packages';
+import { getGameDefinition } from '../../../../lib/games';
 
 // ─── Body Parser ──────────────────────────────────────────────────────────────
 
@@ -156,10 +157,13 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ uid
     const { transactionId, donorName, amount, message, createdAt, levelTitle } = donation;
     console.log(`[Sociabuzz/${uid}] → donor: "${donorName}", amount: ${amount}, message: "${message}", level: "${levelTitle}"`);
 
-    const [rates, featureSettings] = await Promise.all([getRates(uid), getFeatures(uid)]);
+    const [rates, featureSettings, activeGame] = await Promise.all([
+      getRates(uid), getFeatures(uid), getActiveGame(uid),
+    ]);
+    const gameDef = getGameDefinition(activeGame);
 
-    // Comment Album detection
-    const albumMatch = featureSettings.commentAlbum
+    // Comment Album detection — ML only
+    const albumMatch = (activeGame === 'ml' && featureSettings.commentAlbum)
       ? message.match(/^ALBUM:\s*(\d+)\s+(.+)/i)
       : null;
 
@@ -173,18 +177,18 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ uid
       return NextResponse.json({ success: true, type: 'comment_album', donorName, gameId, ign: albumIgn });
     }
 
-    // Parse ML ID + IGN from message
-    const parsed = parseMessage(message);
+    // Parse player ID + IGN from message, using this streamer's active game's parser
+    const parsed = gameDef.parseMessage(message);
     if (!parsed || !parsed.player_id) {
-      console.warn(`[Sociabuzz/${uid}] ✗ No ML ID in message: "${message}"`);
+      console.warn(`[Sociabuzz/${uid}] ✗ No ${gameDef.idLabel} in message: "${message}"`);
       await addDoc(collection(db, 'users', uid, 'donations'), {
         donorName, amount, ign: null, player_id: null, gamesAdded: 0,
         message, transaction_id: transactionId, packageTitle: levelTitle,
-        status: 'failed_parse', timestamp: serverTimestamp(),
+        status: 'failed_parse', game: activeGame, timestamp: serverTimestamp(),
       });
       return NextResponse.json({
         success: true,
-        warning: `No ML ID found in message "${message}"`,
+        warning: `No ${gameDef.idLabel} found in message "${message}"`,
       });
     }
 
@@ -215,7 +219,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ uid
         await addDoc(collection(db, 'users', uid, 'donations'), {
           donorName, amount, ign, player_id, gamesAdded: 0,
           message, transaction_id: transactionId, packageTitle,
-          status: 'package_disabled', timestamp: serverTimestamp(),
+          status: 'package_disabled', game: activeGame, timestamp: serverTimestamp(),
         });
         return NextResponse.json({
           success: true,
@@ -242,7 +246,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ uid
       await addDoc(collection(db, 'users', uid, 'donations'), {
         donorName, amount, ign, player_id, gamesAdded: 0,
         message, transaction_id: transactionId, packageTitle,
-        status: 'no_games', timestamp: serverTimestamp(),
+        status: 'no_games', game: activeGame, timestamp: serverTimestamp(),
       });
       return NextResponse.json({ success: true, warning: `Could not determine games for RM${amount}` });
     }
@@ -259,7 +263,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ uid
       addDoc(collection(db, 'users', uid, 'donations'), {
         donorName, amount, ign, player_id, gamesAdded: games, gameSource,
         message, transaction_id: transactionId, packageTitle,
-        status: 'success', timestamp: serverTimestamp(),
+        status: 'success', game: activeGame, timestamp: serverTimestamp(),
       }),
     ]);
 
