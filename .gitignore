@@ -73,3 +73,6 @@ node_modules/
 
 # dataconnect generated files
 .dataconnect
+
+# Personal planning docs (not shared via git)
+docs/PLAN.md
