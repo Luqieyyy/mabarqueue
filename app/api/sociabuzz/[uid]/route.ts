@@ -1,12 +1,19 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { timingSafeEqual } from 'crypto';
-import { addDoc, collection, serverTimestamp } from 'firebase/firestore';
 import { extractGamesFromPackage, extractLevelInfo } from '../../../../lib/donation';
-import { addPlayerToQueue, formatOrderDate } from '../../../../lib/queue';
-import { db } from '../../../../lib/firebase';
-import { getRates, getFeatures, getWebhookToken, getActiveGame, convertAmountToGames } from '../../../../lib/settings';
-import { ensurePackageExists } from '../../../../lib/packages';
 import { getGameDefinition } from '../../../../lib/games';
+import {
+  admitPaidViewer,
+  convertAmountToGames,
+  ensurePackageExists,
+  formatOrderDate,
+  getActiveGame,
+  getFeatures,
+  getRates,
+  getWebhookToken,
+  logAlbumComment,
+  logDonation,
+} from '../../../../lib/admin/webhook-repo';
 
 // ─── Body Parser ──────────────────────────────────────────────────────────────
 
@@ -191,9 +198,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ uid
     if (albumMatch) {
       const gameId = albumMatch[1].trim();
       const albumIgn = albumMatch[2].trim();
-      await addDoc(collection(db, 'users', uid, 'comment_album'), {
-        donorName, gameId, ign: albumIgn, amount, message, timestamp: serverTimestamp(),
-      });
+      await logAlbumComment(uid, { donorName, gameId, ign: albumIgn, amount, message });
       console.log(`[Sociabuzz/${uid}] ✓ Album comment saved`);
       return NextResponse.json({ success: true, type: 'comment_album', donorName, gameId, ign: albumIgn });
     }
@@ -202,10 +207,10 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ uid
     const parsed = gameDef.parseMessage(message);
     if (!parsed || !parsed.player_id) {
       console.warn(`[Sociabuzz/${uid}] ✗ No ${gameDef.idLabel} in message: "${message}"`);
-      await addDoc(collection(db, 'users', uid, 'donations'), {
-        donorName, amount, ign: null, player_id: null, gamesAdded: 0,
-        message, transaction_id: transactionId, packageTitle: levelTitle,
-        status: 'failed_parse', game: activeGame, timestamp: serverTimestamp(),
+      await logDonation(uid, {
+        donorName, amount, ign: null, playerId: null, gamesAdded: 0,
+        message, transactionId, packageTitle: levelTitle,
+        status: 'failed_parse', game: activeGame,
       });
       return NextResponse.json({
         success: true,
@@ -225,7 +230,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ uid
 
     if (levelInfo) {
       // Auto-create or fetch existing package
-      const { pkg } = await ensurePackageExists(
+      const pkg = await ensurePackageExists(
         uid,
         levelInfo.title,
         levelInfo.price || amount,
@@ -237,10 +242,10 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ uid
       // Check if package is active
       if (!pkg.isActive) {
         console.warn(`[Sociabuzz/${uid}] ✗ Package "${levelInfo.title}" is disabled`);
-        await addDoc(collection(db, 'users', uid, 'donations'), {
-          donorName, amount, ign, player_id, gamesAdded: 0,
-          message, transaction_id: transactionId, packageTitle,
-          status: 'package_disabled', game: activeGame, timestamp: serverTimestamp(),
+        await logDonation(uid, {
+          donorName, amount, ign, playerId: player_id, gamesAdded: 0,
+          message, transactionId, packageTitle,
+          status: 'package_disabled', game: activeGame,
         });
         return NextResponse.json({
           success: true,
@@ -264,10 +269,10 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ uid
     }
 
     if (games === 0) {
-      await addDoc(collection(db, 'users', uid, 'donations'), {
-        donorName, amount, ign, player_id, gamesAdded: 0,
-        message, transaction_id: transactionId, packageTitle,
-        status: 'no_games', game: activeGame, timestamp: serverTimestamp(),
+      await logDonation(uid, {
+        donorName, amount, ign, playerId: player_id, gamesAdded: 0,
+        message, transactionId, packageTitle,
+        status: 'no_games', game: activeGame,
       });
       return NextResponse.json({ success: true, warning: `Could not determine games for RM${amount}` });
     }
@@ -279,14 +284,28 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ uid
       orderDate = formatOrderDate();
     }
 
-    await Promise.all([
-      addPlayerToQueue(uid, donorName, ign, games, orderDate, player_id, transactionId, packageTitle ?? undefined),
-      addDoc(collection(db, 'users', uid, 'donations'), {
-        donorName, amount, ign, player_id, gamesAdded: games, gameSource,
-        message, transaction_id: transactionId, packageTitle,
-        status: 'success', game: activeGame, timestamp: serverTimestamp(),
-      }),
-    ]);
+    // Idempotency requires a real, stable key. Sociabuzz payloads normally
+    // carry `id`, but if a caller ever omits it, fabricate one so the
+    // transaction still has a valid document ID — this request simply won't
+    // be deduplicated against a retry, which only affects malformed payloads.
+    const idempotencyKey = transactionId || `no-txn-${crypto.randomUUID()}`;
+
+    const admission = await admitPaidViewer({
+      uid, username: donorName, ign, games, orderDate,
+      playerId: player_id, transactionId: idempotencyKey,
+      packageTitle: packageTitle ?? undefined, game: activeGame,
+    });
+
+    if (admission.kind === 'duplicate') {
+      console.warn(`[Sociabuzz/${uid}] ✗ Duplicate delivery ignored (transaction_id: ${transactionId})`);
+      return NextResponse.json({ success: true, warning: 'Duplicate webhook delivery — already processed' });
+    }
+
+    await logDonation(uid, {
+      donorName, amount, ign, playerId: player_id, gamesAdded: games, gameSource,
+      message, transactionId, packageTitle,
+      status: 'success', game: activeGame,
+    });
 
     console.log(`[Sociabuzz/${uid}] ✓ ${donorName} → "${ign}" (ML: ${player_id}, ${games} games, pkg: "${packageTitle}")`);
     console.log(`━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n`);
