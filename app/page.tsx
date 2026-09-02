@@ -270,7 +270,7 @@ export default function LandingPage() {
               <span className="text-gray-400 font-semibold">Product description</span>
               <span>
                 MabarQueue is a software-as-a-service platform for livestream creators to manage paid play-together gaming sessions.
-                Viewers can purchase game packages to join a streamer's queue, while MabarQueue automatically manages game credits,
+                Viewers can purchase game packages to join a streamer&apos;s queue, while MabarQueue automatically manages game credits,
                 queue positions, and real-time stream overlays. The platform charges a percentage-based service fee on successful
                 transactions processed through the platform.
               </span>
