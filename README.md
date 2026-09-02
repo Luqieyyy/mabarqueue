@@ -8,11 +8,11 @@ Viewers donate via Sociabuzz → auto-join the game queue → streamer presses F
 ## What Changed (Latest Update)
 
 ### Core Logic Overhaul
-- **Multi-player current game**: Up to **4 viewers** can be IN GAME at the same time (Syno + 4 viewers = 5 players per game).
-- **Finish Game deducts from ALL**: When Syno presses "Finish Game", all 4 in-game viewers lose 1 game each.
-- **Skip → Hutang Game**: If a viewer has internet issues, Syno can Skip them. They move to **Hutang Game** with their games **unchanged** (no deduction). Selagi tak tekan Finish Game, baki game takkan dikurang.
+- **Multi-player current game**: Up to **4 viewers** can be IN GAME at the same time (streamer + 4 viewers = 5 players per game).
+- **Finish Game deducts from ALL**: When the streamer presses "Finish Game", all 4 in-game viewers lose 1 game each.
+- **Skip → Hutang Game**: If a viewer has internet issues, the streamer can Skip them. They move to **Hutang Game** with their games **unchanged** (no deduction). Selagi tak tekan Finish Game, baki game takkan dikurang.
 - **Auto-promote**: When a slot opens, the next person in queue is automatically pulled into the game.
-- **Hutang Game panel**: Separate list for skipped viewers. Syno can send them back to queue when they're ready, or remove them.
+- **Hutang Game panel**: Separate list for skipped viewers. The streamer can send them back to queue when they're ready, or remove them.
 
 ### New Data Model (Firestore Collections)
 | Collection | Purpose |
@@ -198,7 +198,7 @@ NEXT_PUBLIC_FIREBASE_APP_ID=...
 ```
 
 ### 3. Create Streamer Account
-In Firebase Console → Authentication → Users → Add user (email + password for Syno to log in)
+In Firebase Console → Authentication → Users → Add user (email + password for the streamer to log in)
 
 ### 4. Run Locally
 ```bash
@@ -216,7 +216,7 @@ Add the same env variables in Vercel dashboard → Project → Settings → Envi
 1. Sociabuzz → Integrations → Webhook
 2. Webhook URL: `https://your-vercel-domain.vercel.app/api/sociabuzz`
 3. Enable webhook → copy token
-4. In SynoQueue dashboard → click "Webhook" → paste token → Save
+4. In MabarQueue dashboard → click "Webhook" → paste token → Save
 
 ---
 
@@ -268,4 +268,4 @@ components/
 
 ---
 
-*Built for Syno · synoplays_*
+*MabarQueue — automated queue management for streamers*

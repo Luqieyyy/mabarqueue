@@ -238,31 +238,50 @@ export default function LandingPage() {
         <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[500px] h-[500px] bg-violet-600/20 blur-[120px] rounded-full -z-10" />
         <div className="max-w-2xl mx-auto">
           <h2 className="text-4xl md:text-6xl font-black text-white mb-6">Ready to dominate?</h2>
-          <p className="text-gray-400 text-lg mb-10">Join 100+ streamers using MabarQueue to monetize their gameplay.</p>
+          <p className="text-gray-400 text-lg mb-10">Ready to streamline your mabar sessions?</p>
           <Link
             href="/login"
             className="inline-block bg-white text-black hover:bg-violet-100 font-black px-12 py-5 rounded-2xl transition-all text-xl shadow-2xl active:scale-95"
           >
-            Start Free Trial
+            Get Started
           </Link>
         </div>
       </motion.section>
 
       {/* ── Footer ── */}
       <footer className="border-t border-white/5 py-12 px-4 bg-[#05050a]">
-        <div className="max-w-6xl mx-auto flex flex-col md:row items-center justify-between gap-8">
-          <div className="flex flex-col items-center md:items-start gap-4">
+        <div className="max-w-6xl mx-auto flex flex-col md:flex-row items-start justify-between gap-10">
+          <div className="flex flex-col items-center md:items-start gap-4 max-w-2xl">
             <div className="flex items-center gap-2">
               <div className="w-6 h-6 bg-violet-600 rounded flex items-center justify-center text-[10px] font-black">M</div>
               <span className="text-white font-bold text-sm tracking-widest uppercase">MabarQueue</span>
             </div>
-            <p className="text-gray-600 text-xs">© 2024 Built for the community.</p>
+            <p className="text-gray-500 text-sm text-center md:text-left max-w-xl">
+              A platform for livestream creators to manage paid play-together gaming sessions and viewer queues.
+            </p>
+            <p className="text-gray-600 text-xs">Operated by LUQIEYYYDEV IT SOLUTION</p>
+            <div className="grid gap-3 text-sm text-gray-500 md:grid-cols-[auto_1fr] md:text-left">
+              <span className="text-gray-400 font-semibold">Industry</span>
+              <span>Software as a service</span>
+              <span className="text-gray-400 font-semibold">Business website</span>
+              <a href="https://mabarqueue.vercel.app" className="hover:text-violet-400 transition-colors">
+                https://mabarqueue.vercel.app
+              </a>
+              <span className="text-gray-400 font-semibold">Product description</span>
+              <span>
+                MabarQueue is a software-as-a-service platform for livestream creators to manage paid play-together gaming sessions.
+                Viewers can purchase game packages to join a streamer's queue, while MabarQueue automatically manages game credits,
+                queue positions, and real-time stream overlays. The platform charges a percentage-based service fee on successful
+                transactions processed through the platform.
+              </span>
+            </div>
+            <p className="text-gray-600 text-xs">&copy; 2026 MabarQueue. Operated by LUQIEYYYDEV IT SOLUTION.</p>
           </div>
-          <div className="flex gap-8">
-            {['Queue', 'Dashboard', 'Overlay'].map((item) => (
-              <Link key={item} href={`/${item.toLowerCase()}`} className="text-gray-500 hover:text-violet-400 text-sm font-medium transition-colors">
+          <div className="flex flex-wrap justify-center md:justify-end gap-x-8 gap-y-3">
+            {['Terms of Service', 'Privacy Policy', 'Refund Policy', 'Contact'].map((item) => (
+              <a key={item} href="#" className="text-gray-500 hover:text-violet-400 text-sm font-medium transition-colors">
                 {item}
-              </Link>
+              </a>
             ))}
           </div>
         </div>

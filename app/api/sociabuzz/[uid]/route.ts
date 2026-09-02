@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { timingSafeEqual } from 'crypto';
 import { addDoc, collection, serverTimestamp } from 'firebase/firestore';
 import { extractGamesFromPackage, extractLevelInfo } from '../../../../lib/donation';
 import { addPlayerToQueue, formatOrderDate } from '../../../../lib/queue';
@@ -29,6 +30,14 @@ async function parseBody(req: NextRequest): Promise<Record<string, unknown>> {
 }
 
 // ─── Token Verification ───────────────────────────────────────────────────────
+
+/** Length-safe, constant-time token comparison. */
+function safeEqual(a: string, b: string): boolean {
+  const ab = Buffer.from(a);
+  const bb = Buffer.from(b);
+  if (ab.length !== bb.length) return false;
+  return timingSafeEqual(ab, bb);
+}
 
 function getIncomingToken(req: NextRequest): string | null {
   return (
@@ -136,17 +145,29 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ uid
     const body = await parseBody(req);
     console.log('[Sociabuzz] Body:', JSON.stringify(body, null, 2));
 
-    // Token verification against this user's saved token
+    // ─── Token verification (REQUIRED) ──────────────────────────────────
+    // A forged POST here mints game credits, so an unverified request is
+    // never processed. A streamer with no token saved cannot receive
+    // donations until they set one in Dashboard → Webhook.
     const savedToken = await getWebhookToken(uid);
-    if (savedToken) {
-      const bodyToken = typeof body.token === 'string' ? body.token : null;
-      const incomingToken = getIncomingToken(req) ?? bodyToken;
-      if (incomingToken !== savedToken) {
-        console.warn(`[Sociabuzz/${uid}] ✗ Token mismatch — processing anyway`);
-      } else {
-        console.log(`[Sociabuzz/${uid}] ✓ Token verified`);
-      }
+    if (!savedToken) {
+      console.error(`[Sociabuzz/${uid}] ✗ Rejected — no webhook token configured`);
+      return NextResponse.json(
+        { success: false, error: 'Webhook token not configured for this streamer' },
+        { status: 401 },
+      );
     }
+
+    const bodyToken = typeof body.token === 'string' ? body.token : null;
+    const incomingToken = getIncomingToken(req) ?? bodyToken;
+    if (!incomingToken || !safeEqual(incomingToken, savedToken)) {
+      console.error(`[Sociabuzz/${uid}] ✗ Rejected — invalid webhook token`);
+      return NextResponse.json(
+        { success: false, error: 'Invalid webhook token' },
+        { status: 401 },
+      );
+    }
+    console.log(`[Sociabuzz/${uid}] ✓ Token verified`);
 
     const donation = extractDonation(body);
     if (!donation) {
