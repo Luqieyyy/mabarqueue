@@ -64,9 +64,12 @@ export async function createConnectedAccount(params: {
       name: params.displayName,
       product_description: 'Paid play-together gaming sessions with viewers',
     },
+    // FPX is deliberately NOT requested here. Stripe rejects it at creation
+    // with "requires `business_type` to be provided", and business_type is
+    // precisely what hosted onboarding collects. It's requested afterwards by
+    // `ensureFpxCapability`, and only for the business types that allow it.
     capabilities: {
       card_payments: { requested: true },
-      fpx_payments: { requested: true },
       transfers: { requested: true },
     },
     controller: {
@@ -125,6 +128,47 @@ export const STRIPE_DASHBOARD_URL = 'https://dashboard.stripe.com/';
  */
 export function dashboardUrlFor(): string {
   return STRIPE_DASHBOARD_URL;
+}
+
+/**
+ * Business types that may request the FPX capability.
+ *
+ * Verified against the sandbox API: requesting `fpx_payments` for an
+ * `individual` or `sole_proprietor` account is rejected outright with
+ * "The fpx_payments capability is not requestable for Individual or Sole
+ * Proprietor accounts." Only registered entities qualify, which is the same
+ * reason Stripe requires a Business Registration Number for FPX.
+ */
+const FPX_ELIGIBLE_BUSINESS_TYPES = new Set(['company', 'non_profit']);
+
+export type FpxEligibility = 'requested' | 'already_requested' | 'ineligible' | 'unknown_yet';
+
+/**
+ * Requests the FPX capability once the account's business type is known.
+ *
+ * Called after onboarding rather than at creation, because FPX can only be
+ * requested when `business_type` is already set — and then only for eligible
+ * entity types. An individual streamer simply keeps card payments; this is a
+ * Stripe/regulatory limit, not something the integration can work around.
+ */
+export async function ensureFpxCapability(
+  stripeAccountId: string,
+): Promise<{ outcome: FpxEligibility; businessType: string | null }> {
+  const account = await stripe().accounts.retrieve(stripeAccountId);
+  const businessType = account.business_type ?? null;
+
+  if (!businessType) return { outcome: 'unknown_yet', businessType: null };
+  if (!FPX_ELIGIBLE_BUSINESS_TYPES.has(businessType)) {
+    return { outcome: 'ineligible', businessType };
+  }
+  if (account.capabilities?.fpx_payments) {
+    return { outcome: 'already_requested', businessType };
+  }
+
+  await stripe().accounts.update(stripeAccountId, {
+    capabilities: { fpx_payments: { requested: true } },
+  });
+  return { outcome: 'requested', businessType };
 }
 
 /** Reads the live capability flags for a connected account. */

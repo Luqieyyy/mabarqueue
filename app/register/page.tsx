@@ -99,7 +99,7 @@ export default function RegisterPage() {
         email: cleanEmail,
         username,
         slug: slugCheck.slug,
-        role: 'creator',
+        role: 'streamer',
         plan: 'creator',
         accountStatus: 'active',
         onboardingStatus: 'registered',

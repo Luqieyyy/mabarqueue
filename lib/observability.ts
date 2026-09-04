@@ -17,6 +17,7 @@ export type AppEvent =
   | 'stripe_onboarding_link_created'
   | 'stripe_onboarding_link_refreshed'
   | 'stripe_account_status_synced'
+  | 'stripe_fpx_capability_checked'
   | 'stripe_onboarding_failed'
   | 'stripe_dashboard_access_requested'
   | 'stripe_checkout_blocked';

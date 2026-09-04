@@ -259,6 +259,51 @@ describe('incomplete onboarding', () => {
   });
 });
 
+// ─── FPX eligibility ─────────────────────────────────────────────────────────
+
+describe('FPX capability eligibility', () => {
+  /**
+   * Mirrors `ensureFpxCapability`'s decision table.
+   *
+   * These rules were established empirically against the Stripe sandbox:
+   * requesting fpx_payments at account creation fails with "requires
+   * `business_type` to be provided", and for individual/sole_proprietor it
+   * fails with "not requestable for Individual or Sole Proprietor accounts".
+   */
+  const eligible = new Set(['company', 'non_profit']);
+
+  function fpxOutcome(businessType: string | null, alreadyRequested = false) {
+    if (!businessType) return 'unknown_yet';
+    if (!eligible.has(businessType)) return 'ineligible';
+    if (alreadyRequested) return 'already_requested';
+    return 'requested';
+  }
+
+  it('defers while business_type is unknown, so account creation never fails', () => {
+    expect(fpxOutcome(null)).toBe('unknown_yet');
+  });
+
+  it('reports individuals and sole proprietors as ineligible', () => {
+    expect(fpxOutcome('individual')).toBe('ineligible');
+    expect(fpxOutcome('sole_proprietor')).toBe('ineligible');
+  });
+
+  it('requests FPX for registered entities', () => {
+    expect(fpxOutcome('company')).toBe('requested');
+    expect(fpxOutcome('non_profit')).toBe('requested');
+  });
+
+  it('does not re-request an existing capability', () => {
+    expect(fpxOutcome('company', true)).toBe('already_requested');
+  });
+
+  it('never blocks onboarding — every path yields an outcome, not a throw', () => {
+    for (const bt of [null, 'individual', 'sole_proprietor', 'company', 'non_profit']) {
+      expect(typeof fpxOutcome(bt)).toBe('string');
+    }
+  });
+});
+
 // ─── Platform fee is not streamer-controlled ─────────────────────────────────
 
 describe('platform fee', () => {

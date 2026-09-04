@@ -13,6 +13,7 @@ import { saveStripeFlags } from './payments-repo';
 import {
   createConnectedAccount,
   createOnboardingLink,
+  ensureFpxCapability,
   fetchCapabilityFlags,
 } from '../stripe/connect';
 import { logEvent, logFailure } from '../observability';
@@ -148,6 +149,24 @@ export async function syncAccountStatus(streamer: Streamer): Promise<{
       detailsSubmitted: false,
       status: 'not_connected',
     };
+  }
+
+  // Now that onboarding may have supplied a business type, try to add FPX.
+  // Best-effort: an individual/sole-proprietor streamer can't have it, and
+  // that must not block the rest of the sync.
+  try {
+    const fpx = await ensureFpxCapability(streamer.stripeAccountId);
+    logEvent('stripe_fpx_capability_checked', {
+      streamerId: streamer.streamerId,
+      stripeAccountId: streamer.stripeAccountId,
+      outcome: fpx.outcome,
+      businessType: fpx.businessType,
+    });
+  } catch (err) {
+    logFailure('stripe_onboarding_failed', err, {
+      streamerId: streamer.streamerId,
+      step: 'request_fpx_capability',
+    });
   }
 
   let flags;
