@@ -18,7 +18,8 @@
     "next": "^14.2.35",
     "react": "^18",
     "react-dom": "^18",
-    "server-only": "^0.0.1"
+    "server-only": "^0.0.1",
+    "stripe": "^22.6.1"
   },
   "devDependencies": {
     "@types/node": "^20.19.37",

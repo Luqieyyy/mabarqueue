@@ -155,6 +155,13 @@ export default function LoginPage() {
             )}
             {googleLoading ? 'Connecting...' : 'Continue with Google'}
           </button>
+
+          <div className="mt-5 rounded-xl border border-white/5 bg-white/[0.03] px-4 py-3 text-center">
+            <p className="text-xs text-gray-500">New creator workspace?</p>
+            <Link href="/register" className="text-sm font-bold text-violet-400 hover:text-violet-300 transition-colors">
+              Create an account
+            </Link>
+          </div>
         </div>
 
         <div className="text-center mt-6">

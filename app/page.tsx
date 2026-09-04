@@ -57,7 +57,7 @@ export default function LandingPage() {
           </motion.div>
           <motion.div initial={{ opacity: 0, x: 20 }} animate={{ opacity: 1, x: 0 }}>
             <Link
-              href="/login"
+              href="/register"
               className="bg-violet-600 hover:bg-violet-500 text-white text-sm font-bold px-5 py-2.5 rounded-lg transition-all hover:shadow-lg hover:shadow-violet-500/40 active:scale-95"
             >
               Get Started
@@ -117,7 +117,7 @@ export default function LandingPage() {
             className="flex flex-col sm:flex-row gap-4 justify-center items-center"
           >
             <Link
-              href="/login"
+              href="/register"
               className="group relative bg-violet-600 hover:bg-violet-500 text-white font-bold px-10 py-4 rounded-xl transition-all text-lg hover:scale-105 shadow-xl shadow-violet-600/20"
             >
               Start Streaming
@@ -240,7 +240,7 @@ export default function LandingPage() {
           <h2 className="text-4xl md:text-6xl font-black text-white mb-6">Ready to dominate?</h2>
           <p className="text-gray-400 text-lg mb-10">Ready to streamline your mabar sessions?</p>
           <Link
-            href="/login"
+            href="/register"
             className="inline-block bg-white text-black hover:bg-violet-100 font-black px-12 py-5 rounded-2xl transition-all text-xl shadow-2xl active:scale-95"
           >
             Get Started

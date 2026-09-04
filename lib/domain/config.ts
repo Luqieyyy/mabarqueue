@@ -51,6 +51,27 @@ export const DEFAULT_MAX_SLOTS = 4;
 /** Hard ceiling — guards against a malformed setting opening unbounded slots. */
 export const MAX_ALLOWED_SLOTS = 10;
 
+// ─── Default packages ─────────────────────────────────────────────────────────
+
+/**
+ * Packages seeded into a brand-new workspace, so a streamer's public page has
+ * something purchasable the moment it exists.
+ *
+ * Mirrors the historical RM4/10/20/30 tiers, expressed in integer sen. The
+ * streamer can edit or delete any of them afterwards.
+ */
+export const DEFAULT_PACKAGES: ReadonlyArray<{
+  title: string;
+  description: string;
+  priceSen: number;
+  games: number;
+}> = [
+  { title: '1 Game', description: 'One game with me', priceSen: 400, games: 1 },
+  { title: '3 Games', description: 'Three games with me', priceSen: 1000, games: 3 },
+  { title: '6 Games', description: 'Six games with me', priceSen: 2000, games: 6 },
+  { title: '10 Games', description: 'Ten games with me', priceSen: 3000, games: 10 },
+];
+
 // ─── Currency ─────────────────────────────────────────────────────────────────
 
 export const SUPPORTED_CURRENCY = 'MYR' as const;

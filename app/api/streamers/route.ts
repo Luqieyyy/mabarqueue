@@ -2,6 +2,9 @@ import { NextRequest, NextResponse } from 'next/server';
 import { withAuth } from '../../../lib/require-auth';
 import { createStreamer, getStreamerByOwner } from '../../../lib/admin/streamers-repo';
 
+// Reads per-request auth headers, so it must never be statically prerendered.
+export const dynamic = 'force-dynamic';
+
 /**
  * POST /api/streamers
  *

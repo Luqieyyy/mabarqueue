@@ -15,6 +15,7 @@ import { FieldValue } from 'firebase-admin/firestore';
 import { adminDb } from '../firebase-admin';
 import { validateSlug, type AuthUid, type Slug, type StreamerId } from '../domain/ids';
 import { DEFAULT_GAME } from '../games';
+import { DEFAULT_PACKAGES } from '../domain/config';
 import type { Streamer, StreamerStatus } from '../domain/types';
 
 function streamersCol() {
@@ -105,6 +106,18 @@ export async function createStreamer(
     tx.set(slugRef, { streamerId: streamerRef.id, createdAt: now });
     tx.set(userRef, { primaryStreamerId: streamerRef.id, updatedAt: now }, { merge: true });
 
+    // Seed starter packages in the same transaction, so a new workspace's
+    // public page is never empty.
+    DEFAULT_PACKAGES.forEach((pkg, index) => {
+      tx.set(streamerRef.collection('packages').doc(), {
+        ...pkg,
+        enabled: true,
+        sortOrder: index,
+        createdAt: now,
+        updatedAt: now,
+      });
+    });
+
     return { ok: true as const, streamerId: streamerRef.id, data: streamerData };
   });
 
@@ -129,6 +142,30 @@ export async function getStreamerByOwner(authUid: AuthUid): Promise<Streamer | n
   const snap = await streamersCol().where('ownerUid', '==', authUid).limit(1).get();
   if (snap.empty) return null;
   return docToStreamer(snap.docs[0]);
+}
+
+/**
+ * Resolves a streamer by their Stripe connected account ID.
+ *
+ * Used by the Connect webhook, where `account.updated` events identify the
+ * account but carry no MabarQueue identifiers.
+ */
+export async function getStreamerByStripeAccount(
+  stripeAccountId: string,
+): Promise<Streamer | null> {
+  const snap = await streamersCol()
+    .where('stripeAccountId', '==', stripeAccountId)
+    .limit(1)
+    .get();
+  if (snap.empty) return null;
+  return docToStreamer(snap.docs[0]);
+}
+
+/** Resolves a streamer by internal ID. */
+export async function getStreamerById(streamerId: string): Promise<Streamer | null> {
+  const snap = await streamersCol().doc(streamerId).get();
+  if (!snap.exists) return null;
+  return docToStreamer(snap);
 }
 
 /** Resolves a streamer by public slug, for `/streamer/[slug]`, `/queue/[slug]`, `/overlay/[slug]`. */

@@ -1,45 +1,114 @@
 rules_version = '2';
 
+// MabarQueue Firestore rules.
+//
+// Posture for the multi-tenant schema (streamers/*): the client gets NO write
+// access and only owner-scoped reads. Public pages are served entirely by API
+// routes using the Firebase Admin SDK (which bypasses these rules by design)
+// and project private fields away before responding. That is what makes
+// "never trust the client" enforceable — a signed-in streamer's browser
+// cannot set its own `gamesLeft`, and a viewer cannot read a streamer's
+// Stripe account ID or fee rate.
+//
+// The legacy users/{username}/* block is retained unchanged so the existing
+// dashboard, /queue and /overlay pages keep working during the migration.
+
 service cloud.firestore {
   match /databases/{database}/documents {
 
+    // ─── Multi-tenant schema ────────────────────────────────────────────
+
+    function ownsStreamer(streamerId) {
+      return request.auth != null
+        && get(/databases/$(database)/documents/streamers/$(streamerId)).data.ownerUid == request.auth.uid;
+    }
+
+    match /streamers/{streamerId} {
+      // Owner-only read, and no client writes at all.
+      //
+      // Public pages never read this collection directly — they go through
+      // /api/public/{slug}, which projects away ownerUid, stripeAccountId and
+      // platformFeeBps. Granting public read here would leak exactly those
+      // fields, so it stays closed even though the page content is public.
+      allow read: if ownsStreamer(streamerId);
+      allow write: if false;
+
+      // Queue entries carry the game-specific `playerId`, which must not be
+      // stream-visible. The public projection in /api/public/{slug} strips
+      // it, so direct client reads are closed here too.
+      match /queue/{entryId} {
+        allow read: if ownsStreamer(streamerId);
+        allow write: if false;
+      }
+
+      match /packages/{packageId} {
+        allow read: if ownsStreamer(streamerId);
+        allow write: if false;
+      }
+
+      // History — owner only.
+      match /history/{docId} {
+        allow read: if ownsStreamer(streamerId);
+        allow write: if false;
+      }
+
+      // Money and payment plumbing — owner may read their own donations;
+      // nothing else is client-readable, and nothing is client-writable.
+      match /donations/{docId} {
+        allow read: if ownsStreamer(streamerId);
+        allow write: if false;
+      }
+      match /payment_events/{docId} {
+        allow read, write: if false;
+      }
+      match /payment_attempts/{docId} {
+        allow read, write: if false;
+      }
+
+      match /{document=**} {
+        allow read, write: if false;
+      }
+    }
+
+    // Slug → streamer mapping. Resolved server-side only; uniqueness is
+    // enforced by the document ID inside a transaction.
+    match /slugs/{slug} {
+      allow read, write: if false;
+    }
+
+    // ─── Legacy single-tenant schema (users/{emailPrefix}) ──────────────
+    // Unchanged: still used by the current dashboard and public pages until
+    // reads are migrated to streamers/*.
+
     match /users/{username} {
-      // Creating: the new doc's uid field must match the signed-in user
       allow create: if request.auth != null
         && request.resource.data.uid == request.auth.uid;
 
-      // Reading/updating/deleting: the stored uid field must match
       allow read, update, delete: if request.auth != null
         && resource.data.uid == request.auth.uid;
 
-      // Queue — public read (for /queue and /overlay pages), owner write
       match /queue/{docId} {
         allow read: if true;
         allow write: if request.auth != null
           && get(/databases/$(database)/documents/users/$(username)).data.uid == request.auth.uid;
       }
 
-      // Donations — owner only
       match /donations/{docId} {
         allow read, write: if request.auth != null
           && get(/databases/$(database)/documents/users/$(username)).data.uid == request.auth.uid;
       }
 
-      // History — owner only
       match /history/{docId} {
         allow read, write: if request.auth != null
           && get(/databases/$(database)/documents/users/$(username)).data.uid == request.auth.uid;
       }
 
-      // Comment album — public read, owner write
       match /comment_album/{docId} {
         allow read: if true;
         allow write: if request.auth != null
           && get(/databases/$(database)/documents/users/$(username)).data.uid == request.auth.uid;
       }
 
-      // Settings — owner only, except "game" which is public read
-      // (needed by the public /queue and /overlay pages to show the right slot count)
       match /settings/{settingId} {
         allow read: if settingId == 'game'
           || (request.auth != null
@@ -48,11 +117,15 @@ service cloud.firestore {
           && get(/databases/$(database)/documents/users/$(username)).data.uid == request.auth.uid;
       }
 
-      // Packages — public read (for display), owner write
       match /packages/{packageId} {
         allow read: if true;
         allow write: if request.auth != null
           && get(/databases/$(database)/documents/users/$(username)).data.uid == request.auth.uid;
+      }
+
+      // Written only by the Admin SDK (webhook idempotency guard).
+      match /payment_events/{docId} {
+        allow read, write: if false;
       }
     }
   }

@@ -2,6 +2,9 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getStreamerBySlug } from '../../../../../lib/admin/streamers-repo';
 import type { PublicStreamer } from '../../../../../lib/domain/types';
 
+// Resolves a per-request slug against Firestore, so it must not be prerendered.
+export const dynamic = 'force-dynamic';
+
 /**
  * GET /api/streamers/slug/:slug
  *

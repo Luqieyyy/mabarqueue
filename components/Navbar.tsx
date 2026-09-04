@@ -35,6 +35,13 @@ export default function Navbar({ userName, onSettings }: Props) {
 
       <div className="flex items-center gap-2">
         <Link
+          href="/dashboard/payments"
+          className="text-xs text-gray-500 hover:text-indigo-600 transition-colors hidden sm:block mr-1 font-medium"
+        >
+          Payments
+        </Link>
+
+        <Link
           href="/queue"
           target="_blank"
           className="text-xs text-gray-500 hover:text-indigo-600 transition-colors hidden sm:block mr-1 font-medium"
