@@ -108,8 +108,8 @@ export interface Streamer {
   stripePayoutsEnabled: boolean;
   stripeDetailsSubmitted: boolean;
 
-  /** Platform fee in basis points. Absent → `DEFAULT_PLATFORM_FEE_BPS`. */
-  platformFeeBps: number;
+  /** Platform fee in basis points. Null → `DEFAULT_PLATFORM_FEE_BPS` (see `resolveFeeBps`). */
+  platformFeeBps: number | null;
 
   /**
    * The pre-migration `users/{emailPrefix}` document ID.

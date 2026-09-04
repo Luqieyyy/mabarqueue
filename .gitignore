@@ -79,3 +79,4 @@ node_modules/
 
 # Personal planning docs (not shared via git)
 docs/PLAN.md
+.DS_Store
