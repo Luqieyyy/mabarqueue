@@ -246,7 +246,9 @@ export const GET = withAdmin(async (_req: NextRequest) => {
     });
   });
 
-  const users = [...rows.values()].sort((a, b) => b.sales.grossSen - a.sales.grossSen);
+  // Array.from rather than spreading the iterator: the build's TS target
+  // doesn't enable downlevelIteration, so [...map.values()] fails to compile.
+  const users = Array.from(rows.values()).sort((a, b) => b.sales.grossSen - a.sales.grossSen);
   recentSales.sort((a, b) => Date.parse(b.createdAt ?? '') - Date.parse(a.createdAt ?? ''));
 
   return NextResponse.json({
