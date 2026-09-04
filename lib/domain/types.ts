@@ -24,6 +24,7 @@
 import type { Sen } from './money';
 import type { AuthUid, PackageId, Slug, StreamerId } from './ids';
 import type { GameId } from '../games';
+import type { StripeAccountStatus } from './stripe-account-status';
 
 // ─── Timestamps ───────────────────────────────────────────────────────────────
 
@@ -107,8 +108,22 @@ export interface Streamer {
   stripeChargesEnabled: boolean;
   stripePayoutsEnabled: boolean;
   stripeDetailsSubmitted: boolean;
+  /**
+   * Payment readiness derived from the flags above, stored so a read doesn't
+   * have to recompute it. Always written server-side from a Stripe-sourced
+   * account object — never from a client or a redirect.
+   */
+  stripeAccountStatus: StripeAccountStatus;
+  /** First time Stripe reported charges enabled. Null until then. */
+  stripeOnboardingCompletedAt: TimestampField;
 
-  /** Platform fee in basis points. Null → `DEFAULT_PLATFORM_FEE_BPS` (see `resolveFeeBps`). */
+  /**
+   * Platform fee in basis points (500 = 5%).
+   *
+   * Platform-controlled: there is no streamer-facing route that writes this,
+   * and Firestore rules deny all client writes to this document. Null on
+   * legacy records falls back to `DEFAULT_PLATFORM_FEE_BPS`.
+   */
   platformFeeBps: number | null;
 
   /**

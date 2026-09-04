@@ -1,48 +1,32 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { withStreamer } from '../../../../../lib/require-streamer';
-import { createConnectedAccount, createOnboardingLink } from '../../../../../lib/stripe/connect';
-import { saveStripeFlags } from '../../../../../lib/admin/payments-repo';
-import { streamerDoc } from '../../../../../lib/admin/paths';
+import { OnboardingError, startOnboarding } from '../../../../../lib/admin/stripe-onboarding';
+
+// Reads per-request auth headers, so it must never be statically prerendered.
+export const dynamic = 'force-dynamic';
 
 /**
  * POST /api/stripe/connect/onboard
  *
- * Starts (or resumes) Stripe-hosted Connect onboarding for the caller's
+ * Starts (or resumes) Stripe-hosted Connect onboarding for the caller's own
  * workspace and returns the URL to redirect them to.
  *
- * The connected account is created once and its ID persisted; subsequent
- * calls reuse it and just mint a fresh Account Link, since links are
- * single-use and short-lived.
+ * Authorization comes from `withStreamer`, which resolves the workspace from
+ * the verified ID token — the request body is never consulted for identity,
+ * so one streamer cannot start onboarding for another.
+ *
+ * Idempotent: an existing connected account is reused rather than duplicated,
+ * so repeated clicks are safe.
  */
 export const POST = withStreamer(async (req: NextRequest, { user, streamer }) => {
-  const origin = req.nextUrl.origin;
-
-  let stripeAccountId = streamer.stripeAccountId;
-
-  if (!stripeAccountId) {
-    stripeAccountId = await createConnectedAccount({
-      email: user.email,
-      displayName: streamer.displayName,
-      streamerId: streamer.streamerId,
-    });
-
-    await streamerDoc(streamer.streamerId).set({ stripeAccountId }, { merge: true });
+  try {
+    const { url } = await startOnboarding(streamer, user.email, req.nextUrl.origin);
+    return NextResponse.json({ success: true, url });
+  } catch (err) {
+    if (err instanceof OnboardingError) {
+      // Safe message only — Stripe's raw error is logged server-side.
+      return NextResponse.json({ success: false, error: err.message }, { status: err.status });
+    }
+    throw err;
   }
-
-  const url = await createOnboardingLink({
-    stripeAccountId,
-    // Sent back through the status endpoint so capability flags refresh as
-    // soon as they return, rather than waiting for the account.updated webhook.
-    returnUrl: `${origin}/dashboard/payments?onboarding=complete`,
-    refreshUrl: `${origin}/dashboard/payments?onboarding=refresh`,
-  });
-
-  await saveStripeFlags(streamer.streamerId, {
-    stripeAccountId,
-    stripeChargesEnabled: streamer.stripeChargesEnabled,
-    stripePayoutsEnabled: streamer.stripePayoutsEnabled,
-    stripeDetailsSubmitted: streamer.stripeDetailsSubmitted,
-  });
-
-  return NextResponse.json({ success: true, url, stripeAccountId });
 });

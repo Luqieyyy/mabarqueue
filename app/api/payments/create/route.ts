@@ -6,6 +6,7 @@ import { getPackage } from '../../../../lib/admin/packages-repo';
 import { resolvePlatformFee, savePaymentAttempt } from '../../../../lib/admin/payments-repo';
 import { MIN_PAYMENT_SEN } from '../../../../lib/domain/config';
 import { getGameDefinition } from '../../../../lib/games';
+import { logEvent } from '../../../../lib/observability';
 
 /**
  * POST /api/payments/create
@@ -29,6 +30,19 @@ import { getGameDefinition } from '../../../../lib/games';
  */
 export async function POST(req: NextRequest) {
   try {
+    // ─── Safety gate ─────────────────────────────────────────────────────
+    // Game credits are granted by the Stripe webhook, which cannot verify
+    // signatures without STRIPE_WEBHOOK_SECRET. Taking a payment while it's
+    // unset would charge the viewer and grant nothing, so checkout is
+    // refused outright rather than risking money-in/nothing-out.
+    if (!process.env.STRIPE_WEBHOOK_SECRET) {
+      logEvent('stripe_checkout_blocked', { reason: 'webhook_secret_not_configured' });
+      return NextResponse.json(
+        { success: false, error: 'Payments are not enabled yet. Please try again later.' },
+        { status: 503 },
+      );
+    }
+
     const body = await req.json().catch(() => null);
 
     const slug = typeof body?.slug === 'string' ? body.slug : '';

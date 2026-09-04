@@ -28,6 +28,10 @@
 import 'server-only';
 import type Stripe from 'stripe';
 import { stripe } from './client';
+import {
+  deriveStripeAccountStatus,
+  type StripeAccountStatus,
+} from '../domain/stripe-account-status';
 
 export const CONNECT_COUNTRY = 'MY';
 export const CONNECT_CURRENCY = 'myr';
@@ -37,6 +41,8 @@ export interface StripeCapabilityFlags {
   stripeChargesEnabled: boolean;
   stripePayoutsEnabled: boolean;
   stripeDetailsSubmitted: boolean;
+  /** Derived from the flags above — see `deriveStripeAccountStatus`. */
+  stripeAccountStatus: StripeAccountStatus;
 }
 
 /**
@@ -97,15 +103,28 @@ export async function createOnboardingLink(params: {
   return link.url;
 }
 
-/** Creates a link to the Stripe-hosted dashboard for an onboarded streamer. */
-export async function createDashboardLink(stripeAccountId: string): Promise<string | null> {
-  try {
-    const link = await stripe().accounts.createLoginLink(stripeAccountId);
-    return link.url;
-  } catch {
-    // Login links only work once the account has completed onboarding.
-    return null;
-  }
+/**
+ * Where a connected account manages their own Stripe account.
+ *
+ * Our accounts are created with `controller.stripe_dashboard.type = 'full'`,
+ * so the streamer has a real Stripe account with their own credentials and
+ * signs in at dashboard.stripe.com directly.
+ *
+ * Deliberately NOT `accounts.createLoginLink`: per Stripe's API reference,
+ * login links take an **Express** account to its Express dashboard. Calling
+ * it on a full-dashboard account fails, so a generated-link flow here would
+ * be permanently broken rather than merely unnecessary.
+ */
+export const STRIPE_DASHBOARD_URL = 'https://dashboard.stripe.com/';
+
+/**
+ * The URL a full-dashboard connected account should be sent to.
+ *
+ * A constant rather than an API call — there is no per-account link to mint
+ * for this account type.
+ */
+export function dashboardUrlFor(): string {
+  return STRIPE_DASHBOARD_URL;
 }
 
 /** Reads the live capability flags for a connected account. */
@@ -114,12 +133,21 @@ export async function fetchCapabilityFlags(stripeAccountId: string): Promise<Str
   return capabilityFlagsFrom(account);
 }
 
-/** Projects a Stripe Account object down to the flags MabarQueue persists. */
+/**
+ * Projects a Stripe Account object down to the flags MabarQueue persists.
+ *
+ * Stripe is the sole source of truth here: this is only ever called with an
+ * account fetched server-side (`accounts.retrieve`) or delivered on a
+ * signature-verified `account.updated` webhook — never with anything a
+ * browser supplied.
+ */
 export function capabilityFlagsFrom(account: Stripe.Account): StripeCapabilityFlags {
-  return {
+  const flags = {
     stripeAccountId: account.id,
     stripeChargesEnabled: Boolean(account.charges_enabled),
     stripePayoutsEnabled: Boolean(account.payouts_enabled),
     stripeDetailsSubmitted: Boolean(account.details_submitted),
   };
+
+  return { ...flags, stripeAccountStatus: deriveStripeAccountStatus(flags) };
 }

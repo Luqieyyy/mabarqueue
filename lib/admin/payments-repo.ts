@@ -14,6 +14,7 @@ import { donationsCol, paymentAttemptDoc, paymentEventDoc, streamerDoc } from '.
 import { calcPlatformFee, toSen, type Sen } from '../domain/money';
 import { resolveFeeBps } from '../domain/config';
 import type { DonationStatus, PaymentProvider } from '../domain/types';
+import type { StripeCapabilityFlags } from '../stripe/connect';
 import type { GameId } from '../games';
 import type { PackageId, StreamerId } from '../domain/ids';
 
@@ -215,22 +216,34 @@ export async function summariseEarnings(
   };
 }
 
-/** Persists refreshed Stripe capability flags on the streamer document. */
+/**
+ * Persists Stripe capability flags on the streamer document.
+ *
+ * Only ever called with flags projected from a Stripe-sourced account object,
+ * so these fields can never be set from a browser or inferred from an
+ * onboarding redirect.
+ *
+ * `stripeOnboardingCompletedAt` is stamped once, the first time Stripe reports
+ * charges enabled, and is not cleared if the account is later restricted —
+ * it records when onboarding was actually finished.
+ */
 export async function saveStripeFlags(
   streamerId: StreamerId,
-  flags: {
-    stripeAccountId: string;
-    stripeChargesEnabled: boolean;
-    stripePayoutsEnabled: boolean;
-    stripeDetailsSubmitted: boolean;
-  },
+  flags: StripeCapabilityFlags,
 ): Promise<void> {
-  await streamerDoc(streamerId).set(
+  const ref = streamerDoc(streamerId);
+  const snap = await ref.get();
+  const alreadyCompleted = Boolean(snap.data()?.stripeOnboardingCompletedAt);
+
+  await ref.set(
     {
       ...flags,
       // A streamer becomes publicly payable only once Stripe says charges
       // are enabled; until then the public page shows them as not accepting.
       ...(flags.stripeChargesEnabled ? { status: 'active' } : {}),
+      ...(flags.stripeChargesEnabled && !alreadyCompleted
+        ? { stripeOnboardingCompletedAt: FieldValue.serverTimestamp() }
+        : {}),
       updatedAt: FieldValue.serverTimestamp(),
     },
     { merge: true },

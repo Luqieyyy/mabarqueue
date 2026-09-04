@@ -6,6 +6,10 @@ import Link from 'next/link';
 import { useAuth } from '../../../lib/auth';
 import { apiFetch, ApiError } from '../../../lib/api-client';
 import { formatSen, toSen } from '../../../lib/domain/money';
+import {
+  deriveStripeAccountStatus,
+  statusCopy,
+} from '../../../lib/domain/stripe-account-status';
 
 interface Streamer {
   streamerId: string;
@@ -91,19 +95,12 @@ function PaymentsContent() {
     if (user) load();
   }, [user, load]);
 
-  // Returning from Stripe onboarding — re-read capabilities from Stripe
-  // rather than trusting the redirect itself.
+  // Stripe's return_url lands on /dashboard/payments/return, which performs
+  // the authoritative sync. Coming back from there, re-read once so this page
+  // shows the freshly stored status.
   useEffect(() => {
-    if (!user || searchParams.get('onboarding') !== 'complete') return;
-    (async () => {
-      try {
-        await apiFetch('/api/stripe/connect/status');
-        await load();
-        setToast('Stripe account refreshed.');
-      } catch {
-        /* the banner below already reflects whatever state Stripe reports */
-      }
-    })();
+    if (!user || searchParams.get('synced') !== '1') return;
+    load().then(() => setToast('Stripe account refreshed.'));
   }, [user, searchParams, load]);
 
   const showToast = (msg: string) => {
@@ -198,8 +195,16 @@ function PaymentsContent() {
     );
   }
 
+  // Status is derived from the same rules the server uses, so the UI can't
+  // present an account as ready when Stripe hasn't enabled charges.
+  const status = deriveStripeAccountStatus({
+    stripeAccountId: streamer?.stripeAccountId ?? null,
+    stripeDetailsSubmitted: Boolean(streamer?.stripeDetailsSubmitted),
+    stripeChargesEnabled: Boolean(streamer?.stripeChargesEnabled),
+    stripePayoutsEnabled: Boolean(streamer?.stripePayoutsEnabled),
+  });
+  const copy = statusCopy(status, Boolean(streamer?.stripePayoutsEnabled));
   const connected = Boolean(streamer?.stripeAccountId);
-  const live = Boolean(streamer?.stripeChargesEnabled);
   const publicUrl = streamer ? `/streamer/${streamer.slug}` : '';
 
   return (
@@ -233,46 +238,65 @@ function PaymentsContent() {
           <div className="flex items-start justify-between gap-4 flex-wrap">
             <div>
               <h2 className="font-bold">Stripe account</h2>
-              <p className="text-gray-500 text-sm mt-1 max-w-lg">
-                Viewers pay you directly. Stripe handles your bank details and pays out on its own
-                schedule — MabarQueue never holds your money.
-              </p>
+              <p className="text-gray-500 text-sm mt-1 max-w-lg">{copy.detail}</p>
             </div>
             <span
               className={`text-xs font-bold px-2.5 py-1 rounded-full shrink-0 ${
-                live
+                status === 'active'
                   ? 'bg-emerald-500/15 text-emerald-400'
-                  : connected
-                    ? 'bg-amber-500/15 text-amber-400'
-                    : 'bg-white/5 text-gray-400'
+                  : status === 'not_connected'
+                    ? 'bg-white/5 text-gray-400'
+                    : 'bg-amber-500/15 text-amber-400'
               }`}
             >
-              {live ? 'Accepting payments' : connected ? 'Setup incomplete' : 'Not connected'}
+              {copy.label}
             </span>
           </div>
 
-          {connected && !live && (
+          {status === 'active' && (
+            <div className="grid sm:grid-cols-2 gap-3 mt-4">
+              {([
+                ['Payments', Boolean(streamer?.stripeChargesEnabled)],
+                ['Payouts', Boolean(streamer?.stripePayoutsEnabled)],
+              ] as const).map(([label, on]) => (
+                <div key={label} className="flex items-center justify-between bg-[#1a1a2a] rounded-xl px-4 py-2.5">
+                  <span className="text-sm text-gray-400">{label}</span>
+                  <span className={`text-sm font-semibold ${on ? 'text-emerald-400' : 'text-amber-400'}`}>
+                    {on ? 'Enabled' : 'Pending'}
+                  </span>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {status === 'onboarding' && (
             <p className="text-amber-400/80 text-xs mt-3">
-              Stripe still needs more information before you can accept payments. To use FPX
-              (Malaysian online banking), Stripe requires a Business Registration Number.
+              To accept FPX (Malaysian online banking), Stripe requires a Business Registration
+              Number during verification.
             </p>
           )}
 
           <div className="flex gap-3 mt-4 flex-wrap">
-            <button
-              onClick={connectStripe}
-              disabled={busy === 'stripe'}
-              className="bg-violet-600 hover:bg-violet-500 disabled:opacity-50 text-white font-bold text-sm px-4 py-2.5 rounded-xl transition-colors"
-            >
-              {busy === 'stripe' ? 'Opening Stripe...' : connected ? 'Continue setup' : 'Connect payments'}
-            </button>
+            {copy.action !== 'none' && (
+              <button
+                onClick={connectStripe}
+                disabled={busy === 'stripe'}
+                className="bg-violet-600 hover:bg-violet-500 disabled:opacity-50 text-white font-bold text-sm px-4 py-2.5 rounded-xl transition-colors"
+              >
+                {busy === 'stripe'
+                  ? 'Opening Stripe...'
+                  : copy.action === 'connect'
+                    ? 'Connect with Stripe'
+                    : 'Continue onboarding'}
+              </button>
+            )}
             {connected && (
               <button
                 onClick={openStripeDashboard}
                 disabled={busy === 'dashboard'}
                 className="bg-white/5 hover:bg-white/10 border border-white/10 disabled:opacity-50 text-white font-semibold text-sm px-4 py-2.5 rounded-xl transition-colors"
               >
-                Open Stripe dashboard
+                Open Stripe Dashboard ↗
               </button>
             )}
           </div>

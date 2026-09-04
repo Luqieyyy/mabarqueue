@@ -15,7 +15,11 @@ import { FieldValue } from 'firebase-admin/firestore';
 import { adminDb } from '../firebase-admin';
 import { validateSlug, type AuthUid, type Slug, type StreamerId } from '../domain/ids';
 import { DEFAULT_GAME } from '../games';
-import { DEFAULT_PACKAGES } from '../domain/config';
+import { DEFAULT_PACKAGES, DEFAULT_PLATFORM_FEE_BPS } from '../domain/config';
+import {
+  deriveStripeAccountStatus,
+  type StripeAccountStatus,
+} from '../domain/stripe-account-status';
 import type { Streamer, StreamerStatus } from '../domain/types';
 
 function streamersCol() {
@@ -96,7 +100,11 @@ export async function createStreamer(
       stripeChargesEnabled: false,
       stripePayoutsEnabled: false,
       stripeDetailsSubmitted: false,
-      platformFeeBps: null, // null → caller falls back to DEFAULT_PLATFORM_FEE_BPS
+      stripeAccountStatus: 'not_connected' as StripeAccountStatus,
+      stripeOnboardingCompletedAt: null,
+      // Platform-controlled. Written here only; no streamer-facing route
+      // updates it, and Firestore rules deny every client write to this doc.
+      platformFeeBps: DEFAULT_PLATFORM_FEE_BPS as number,
       legacyUsername: null,
       createdAt: now,
       updatedAt: now,
@@ -198,6 +206,15 @@ function docToStreamer(doc: FirebaseFirestore.DocumentSnapshot): Streamer {
     stripeChargesEnabled: Boolean(d.stripeChargesEnabled),
     stripePayoutsEnabled: Boolean(d.stripePayoutsEnabled),
     stripeDetailsSubmitted: Boolean(d.stripeDetailsSubmitted),
+    // Recomputed rather than trusted, so a legacy document written before
+    // this field existed still reports a correct status.
+    stripeAccountStatus: deriveStripeAccountStatus({
+      stripeAccountId: d.stripeAccountId ?? null,
+      stripeDetailsSubmitted: Boolean(d.stripeDetailsSubmitted),
+      stripeChargesEnabled: Boolean(d.stripeChargesEnabled),
+      stripePayoutsEnabled: Boolean(d.stripePayoutsEnabled),
+    }),
+    stripeOnboardingCompletedAt: d.stripeOnboardingCompletedAt ?? null,
     platformFeeBps: d.platformFeeBps ?? null,
     legacyUsername: d.legacyUsername ?? null,
     createdAt: d.createdAt ?? null,
