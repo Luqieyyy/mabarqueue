@@ -2,7 +2,7 @@
 
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { signInWithEmailAndPassword, signInWithPopup, GoogleAuthProvider } from 'firebase/auth';
+import { signInWithEmailAndPassword, signInWithPopup, GoogleAuthProvider, type User } from 'firebase/auth';
 import { doc, getDoc, setDoc, serverTimestamp } from 'firebase/firestore';
 import { auth, db } from '../../lib/firebase';
 import { emailToUsername } from '../../lib/auth';
@@ -25,8 +25,18 @@ async function ensureUserDoc(uid: string, name: string | null, email: string | n
       email,
       createdAt: serverTimestamp(),
       plan: 'free',
+      role: 'streamer',
     });
   }
+}
+
+async function routeAfterLogin(user: User, push: (path: string) => void) {
+  const token = await user.getIdTokenResult(true);
+  if (token.claims.admin === true || token.claims.role === 'admin') {
+    push('/admin');
+    return;
+  }
+  push('/dashboard');
 }
 
 export default function LoginPage() {
@@ -44,7 +54,7 @@ export default function LoginPage() {
     try {
       const result = await signInWithEmailAndPassword(auth, email, password);
       await ensureUserDoc(result.user.uid, result.user.displayName, result.user.email);
-      router.push('/dashboard');
+      await routeAfterLogin(result.user, router.push);
     } catch {
       setError('Invalid email or password.');
     } finally {
@@ -59,7 +69,7 @@ export default function LoginPage() {
       const result = await signInWithPopup(auth, new GoogleAuthProvider());
       const { user } = result;
       await ensureUserDoc(user.uid, user.displayName, user.email);
-      router.push('/dashboard');
+      await routeAfterLogin(user, router.push);
     } catch {
       setError('Google sign-in failed. Please try again.');
     } finally {

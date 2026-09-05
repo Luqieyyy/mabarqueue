@@ -308,9 +308,13 @@ function roleClass(role: string) {
 }
 
 function Th({ children, align = 'left' }: { children: React.ReactNode; align?: 'left' | 'right' }) {
-  return <th className={`px-4 py-3 text-${align} text-[11px] font-black uppercase tracking-widest`}>{children}</th>;
+  return (
+    <th className={`px-4 py-3 ${align === 'right' ? 'text-right' : 'text-left'} text-[11px] font-black uppercase tracking-widest`}>
+      {children}
+    </th>
+  );
 }
 
 function Td({ children, align = 'left' }: { children: React.ReactNode; align?: 'left' | 'right' }) {
-  return <td className={`px-4 py-4 align-top text-${align}`}>{children}</td>;
+  return <td className={`px-4 py-4 align-top ${align === 'right' ? 'text-right' : 'text-left'}`}>{children}</td>;
 }
