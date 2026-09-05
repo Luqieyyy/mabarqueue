@@ -16,7 +16,7 @@ interface MoneySummary {
 
 interface SaleRecord {
   id: string;
-  source: 'legacy' | 'stripe';
+  source: 'legacy' | 'workspace';
   ownerId: string;
   streamerId: string | null;
   donorName: string;
@@ -101,14 +101,14 @@ function addFormatted(summary: MoneySummary) {
 function parentInfo(doc: QueryDocumentSnapshot): {
   ownerId: string;
   streamerId: string | null;
-  source: 'legacy' | 'stripe';
+  source: 'legacy' | 'workspace';
 } {
   const parent = doc.ref.parent.parent;
   const collectionId = parent?.parent.id;
   const parentId = parent?.id ?? 'unknown';
 
   if (collectionId === 'streamers') {
-    return { ownerId: parentId, streamerId: parentId, source: 'stripe' };
+    return { ownerId: parentId, streamerId: parentId, source: 'workspace' };
   }
   return { ownerId: parentId, streamerId: null, source: 'legacy' };
 }

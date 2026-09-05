@@ -1,101 +1,122 @@
 /**
- * Donation records and idempotent payment fulfilment — server-only.
+ * Donation records, creator entitlement and idempotent fulfilment — server-only.
  *
- * Firestore here is a *reporting mirror*, not a ledger of record: Stripe
- * remains the source of truth for money movement, balances and payouts. What
- * this module guarantees is that a given provider event grants credits
- * exactly once, no matter how many times Stripe redelivers it.
+ * CHIP is the source of truth for money actually moving. What this module
+ * owns is the consequence of that movement: what the viewer was charged, what
+ * the creator is owed, and what MabarQueue kept — recorded exactly once per
+ * provider event, no matter how many times CHIP redelivers it.
+ *
+ * The fee model matters here. MabarQueue's service fee is charged to the
+ * viewer *on top of* the creator's listed price, so the creator's entitlement
+ * is always their full listing. Nothing in this module ever deducts the
+ * platform fee from a creator.
  */
 
 import 'server-only';
 import { FieldValue } from 'firebase-admin/firestore';
 import { adminDb } from '../firebase-admin';
 import { donationsCol, paymentAttemptDoc, paymentEventDoc, streamerDoc } from './paths';
-import { calcPlatformFee, toSen, type Sen } from '../domain/money';
+import { appendLedgerEntryTx } from './ledger-repo';
+import { calcCheckoutAmounts, toSen, type CheckoutAmounts } from '../domain/money';
 import { resolveFeeBps } from '../domain/config';
 import type { DonationStatus, PaymentProvider } from '../domain/types';
-import type { StripeCapabilityFlags } from '../stripe/connect';
 import type { GameId } from '../games';
 import type { PackageId, StreamerId } from '../domain/ids';
 
 // ─── Pending checkout attempts ────────────────────────────────────────────────
 
+/**
+ * What a checkout was for, recorded before the viewer pays.
+ *
+ * The authoritative amounts live here rather than in provider metadata, so
+ * fulfilment never has to trust anything echoed back over the wire. Keyed by
+ * the CHIP purchase ID.
+ */
 export interface PaymentAttempt {
+  kind: 'mabar' | 'donation';
   streamerId: StreamerId;
-  packageId: PackageId;
-  packageTitle: string;
-  priceSen: number;
-  games: number;
-  feeBps: number;
+  packageId: PackageId | null;
+  packageTitle: string | null;
+
+  // Money, all integer sen.
+  baseSen: number;
   platformFeeSen: number;
+  processingFeeSen: number;
+  totalSen: number;
+  creatorEntitlementSen: number;
+  platformNetSen: number;
+  feeBps: number;
+
+  games: number;
   ign: string;
   playerId: string | null;
   donorName: string;
+  message: string | null;
   game: GameId;
 }
 
-/**
- * Records what a Checkout Session was *for*, before the viewer pays.
- *
- * The viewer's IGN and player ID live here rather than in Stripe metadata:
- * Stripe metadata is limited and shouldn't carry personal data unnecessarily,
- * and the webhook can look this up by session ID anyway.
- */
 export async function savePaymentAttempt(
-  sessionId: string,
+  purchaseId: string,
   attempt: PaymentAttempt,
 ): Promise<void> {
-  await paymentAttemptDoc(attempt.streamerId, sessionId).set({
+  await paymentAttemptDoc(attempt.streamerId, purchaseId).set({
     ...attempt,
-    sessionId,
+    purchaseId,
     createdAt: FieldValue.serverTimestamp(),
   });
 }
 
 export async function getPaymentAttempt(
   streamerId: StreamerId,
-  sessionId: string,
+  purchaseId: string,
 ): Promise<PaymentAttempt | null> {
-  const snap = await paymentAttemptDoc(streamerId, sessionId).get();
+  const snap = await paymentAttemptDoc(streamerId, purchaseId).get();
   if (!snap.exists) return null;
   const d = snap.data()!;
+
+  const baseSen = Number(d.baseSen ?? d.priceSen ?? 0);
+  const platformFeeSen = Number(d.platformFeeSen ?? 0);
+
   return {
     streamerId,
-    packageId: d.packageId as PackageId,
-    packageTitle: String(d.packageTitle ?? ''),
-    priceSen: Number(d.priceSen ?? 0),
-    games: Number(d.games ?? 0),
+    kind: d.kind === 'donation' ? 'donation' : 'mabar',
+    packageId: (d.packageId as PackageId | null) ?? null,
+    packageTitle: typeof d.packageTitle === 'string' ? d.packageTitle : null,
+    baseSen,
+    platformFeeSen,
+    processingFeeSen: Number(d.processingFeeSen ?? 0),
+    totalSen: Number(d.totalSen ?? baseSen + platformFeeSen),
+    creatorEntitlementSen: Number(d.creatorEntitlementSen ?? baseSen),
+    platformNetSen: Number(d.platformNetSen ?? platformFeeSen),
     feeBps: Number(d.feeBps ?? 0),
-    platformFeeSen: Number(d.platformFeeSen ?? 0),
+    games: Number(d.games ?? 0),
     ign: String(d.ign ?? ''),
     playerId: (d.playerId as string | null) ?? null,
     donorName: String(d.donorName ?? ''),
+    message: typeof d.message === 'string' ? d.message : null,
     game: d.game as GameId,
   };
 }
 
 // ─── Fee calculation ──────────────────────────────────────────────────────────
 
-export interface ResolvedFee {
-  grossSen: Sen;
-  platformFeeSen: Sen;
-  feeBps: number;
-}
-
 /**
- * Computes the platform fee for a purchase, server-side.
+ * Resolves every checkout amount from the creator's listed price.
  *
  * The rate comes from the streamer document (falling back to the platform
- * default), never from the request — so a client can't negotiate its own fee.
+ * default), never from the request — so a client cannot negotiate its own fee.
+ * The creator's entitlement is always the full listed price; the fee is added
+ * on top and paid by the viewer.
  */
-export function resolvePlatformFee(priceSen: number, storedFeeBps: number | null): ResolvedFee {
+export function resolveCheckoutAmounts(
+  basePriceSen: number,
+  storedFeeBps: number | null,
+): CheckoutAmounts {
   const bps = resolveFeeBps(storedFeeBps);
-  const breakdown = calcPlatformFee(toSen(priceSen), bps);
-  return {
-    grossSen: breakdown.grossSen,
-    platformFeeSen: breakdown.platformFeeSen,
-    feeBps: bps,
-  };
+  // Processing fee stays zero: MabarQueue absorbs it out of its own platform
+  // fee until CHIP's actual schedule is confirmed, so the viewer is never
+  // charged a rate we invented.
+  return calcCheckoutAmounts(toSen(basePriceSen), bps);
 }
 
 // ─── Donation records ─────────────────────────────────────────────────────────
@@ -105,9 +126,15 @@ export interface DonationInput {
   providerPaymentId: string | null;
   packageId: PackageId | null;
   packageTitle: string | null;
-  grossSen: number;
+
+  baseSen: number;
   platformFeeSen: number;
+  processingFeeSen: number;
+  totalSen: number;
+  creatorEntitlementSen: number;
+  platformNetSen: number;
   feeBps: number;
+
   gamesAdded: number;
   ign: string | null;
   playerId: string | null;
@@ -119,30 +146,88 @@ export interface DonationInput {
   queueEntryId: string | null;
 }
 
+function donationDocData(input: DonationInput) {
+  return {
+    ...input,
+    currency: 'MYR' as const,
+    // Retained so records written under the previous model and this one can
+    // be summed together; both hold the viewer total.
+    grossSen: input.totalSen,
+    createdAt: FieldValue.serverTimestamp(),
+    succeededAt: input.status === 'succeeded' ? FieldValue.serverTimestamp() : null,
+  };
+}
+
+/** Records a payment that produced no creator entitlement (failed, unfulfilled). */
 export async function recordDonation(
   streamerId: StreamerId,
   input: DonationInput,
 ): Promise<string> {
   const ref = donationsCol(streamerId).doc();
-  await ref.set({
-    ...input,
-    currency: 'MYR',
-    processingFeeSen: null, // Known only after settlement; Stripe owns this.
-    netSen: null,
-    createdAt: FieldValue.serverTimestamp(),
-    succeededAt: input.status === 'succeeded' ? FieldValue.serverTimestamp() : null,
-  });
+  await ref.set(donationDocData(input));
   return ref.id;
 }
 
-// ─── Idempotency ──────────────────────────────────────────────────────────────
+// ─── Idempotent fulfilment ────────────────────────────────────────────────────
+
+export type FulfilResult =
+  | { fulfilled: false; reason: 'already_processed' }
+  | { fulfilled: true; donationId: string; ledgerEntryId: string };
 
 /**
- * Claims a provider event for processing, exactly once.
+ * Records a confirmed payment and credits the creator, exactly once.
  *
- * Returns `false` if the event was already handled. The check and the claim
- * happen in one transaction, so two concurrent redeliveries can't both win.
- * The caller does its own work only when this returns `true`.
+ * Claiming the provider event, writing the donation and appending the ledger
+ * entry all commit in a single transaction. That is what makes redelivery
+ * safe: a second callback for the same purchase finds the event document
+ * already present and does nothing, so a creator can never be credited twice
+ * for one payment.
+ */
+export async function fulfilPayment(params: {
+  streamerId: StreamerId;
+  providerEventId: string;
+  provider: PaymentProvider;
+  eventType: string;
+  donation: DonationInput;
+}): Promise<FulfilResult> {
+  const { streamerId, providerEventId, provider, eventType, donation } = params;
+  const eventRef = paymentEventDoc(streamerId, providerEventId);
+  const donationRef = donationsCol(streamerId).doc();
+
+  return adminDb().runTransaction(async (tx) => {
+    const existing = await tx.get(eventRef);
+    if (existing.exists) return { fulfilled: false, reason: 'already_processed' as const };
+
+    tx.set(donationRef, donationDocData(donation));
+
+    // The creator is credited their full listed price. The platform fee was
+    // charged to the viewer on top and never belonged to them.
+    const ledgerEntryId = appendLedgerEntryTx(tx, streamerId, {
+      type: 'earning',
+      amountSen: donation.creatorEntitlementSen,
+      donationId: donationRef.id,
+      providerPaymentId: donation.providerPaymentId,
+      description: donation.packageTitle
+        ? `Payment for ${donation.packageTitle}`
+        : 'Viewer donation',
+    });
+
+    tx.set(eventRef, {
+      provider,
+      type: eventType,
+      donationId: donationRef.id,
+      processedAt: FieldValue.serverTimestamp(),
+    });
+
+    return { fulfilled: true, donationId: donationRef.id, ledgerEntryId };
+  });
+}
+
+/**
+ * Claims a provider event without fulfilling it.
+ *
+ * Used for terminal non-payment events (failure, cancellation) that should
+ * still only be recorded once.
  */
 export async function claimPaymentEvent(
   streamerId: StreamerId,
@@ -166,30 +251,59 @@ export async function claimPaymentEvent(
   });
 }
 
-/** Links a processed event to the donation it produced, for traceability. */
-export async function attachDonationToEvent(
+// ─── Public alert projection ──────────────────────────────────────────────────
+
+export interface PublicDonationAlert {
+  id: string;
+  donorName: string;
+  amountSen: number;
+  message: string | null;
+  createdAtMs: number;
+}
+
+/** Returns only the small, stream-safe projection needed by an OBS alert. */
+export async function getLatestPublicDonationAlert(
   streamerId: StreamerId,
-  providerEventId: string,
-  donationId: string,
-): Promise<void> {
-  await paymentEventDoc(streamerId, providerEventId).set({ donationId }, { merge: true });
+): Promise<PublicDonationAlert | null> {
+  const snap = await donationsCol(streamerId).orderBy('createdAt', 'desc').limit(10).get();
+  const donation = snap.docs.find((doc) => {
+    const data = doc.data();
+    return data.status === 'succeeded' && Number(data.gamesAdded) === 0 && data.queueEntryId == null;
+  });
+  if (!donation) return null;
+
+  const data = donation.data();
+  return {
+    id: donation.id,
+    donorName: String(data.donorName || 'Anonymous supporter'),
+    // The creator's listed price, not the fee-inclusive total — an alert
+    // should show what the creator received.
+    amountSen: Number(data.creatorEntitlementSen ?? data.baseSen ?? data.grossSen ?? 0),
+    message:
+      typeof data.message === 'string' && data.message.trim()
+        ? data.message.trim().slice(0, 240)
+        : null,
+    createdAtMs: typeof data.createdAt?.toMillis === 'function' ? data.createdAt.toMillis() : 0,
+  };
 }
 
 // ─── Earnings ─────────────────────────────────────────────────────────────────
 
 export interface EarningsSummary {
-  grossSen: number;
+  /** Total charged to viewers. */
+  totalSen: number;
+  /** MabarQueue's service fee, charged on top of the creator's price. */
   platformFeeSen: number;
-  netBeforeProcessingSen: number;
+  /** What creators are owed — the sum of their full listed prices. */
+  creatorEntitlementSen: number;
   paymentCount: number;
 }
 
 /**
- * Aggregates successful donations since `since`.
+ * Aggregates successful payments since `since`.
  *
- * Reported from MabarQueue's mirror, so it reflects what the platform
- * recorded — Stripe's dashboard remains authoritative for settled amounts,
- * processing fees and payout state.
+ * Reported from MabarQueue's own records; the creator's withdrawable balance
+ * comes from the ledger, which is the authority for what is actually owed.
  */
 export async function summariseEarnings(
   streamerId: StreamerId,
@@ -199,51 +313,35 @@ export async function summariseEarnings(
   if (since) query = query.where('createdAt', '>=', since);
 
   const snap = await query.get();
-  let grossSen = 0;
+  let totalSen = 0;
   let platformFeeSen = 0;
+  let creatorEntitlementSen = 0;
 
   for (const doc of snap.docs) {
     const d = doc.data();
-    grossSen += Number(d.grossSen ?? 0);
-    platformFeeSen += Number(d.platformFeeSen ?? 0);
+    const fee = Number(d.platformFeeSen ?? 0);
+    // `totalSen`/`creatorEntitlementSen` are absent on records written under
+    // the old deduct model, where `grossSen` was the viewer total and the
+    // creator's share was gross minus the fee.
+    const total = Number(d.totalSen ?? d.grossSen ?? 0);
+    const entitlement = Number(d.creatorEntitlementSen ?? Math.max(0, total - fee));
+
+    totalSen += total;
+    platformFeeSen += fee;
+    creatorEntitlementSen += entitlement;
   }
 
-  return {
-    grossSen,
-    platformFeeSen,
-    netBeforeProcessingSen: Math.max(0, grossSen - platformFeeSen),
-    paymentCount: snap.size,
-  };
+  return { totalSen, platformFeeSen, creatorEntitlementSen, paymentCount: snap.size };
 }
 
-/**
- * Persists Stripe capability flags on the streamer document.
- *
- * Only ever called with flags projected from a Stripe-sourced account object,
- * so these fields can never be set from a browser or inferred from an
- * onboarding redirect.
- *
- * `stripeOnboardingCompletedAt` is stamped once, the first time Stripe reports
- * charges enabled, and is not cleared if the account is later restricted —
- * it records when onboarding was actually finished.
- */
-export async function saveStripeFlags(
+/** Records that a streamer's public page may take payments. */
+export async function setStreamerPayable(
   streamerId: StreamerId,
-  flags: StripeCapabilityFlags,
+  payable: boolean,
 ): Promise<void> {
-  const ref = streamerDoc(streamerId);
-  const snap = await ref.get();
-  const alreadyCompleted = Boolean(snap.data()?.stripeOnboardingCompletedAt);
-
-  await ref.set(
+  await streamerDoc(streamerId).set(
     {
-      ...flags,
-      // A streamer becomes publicly payable only once Stripe says charges
-      // are enabled; until then the public page shows them as not accepting.
-      ...(flags.stripeChargesEnabled ? { status: 'active' } : {}),
-      ...(flags.stripeChargesEnabled && !alreadyCompleted
-        ? { stripeOnboardingCompletedAt: FieldValue.serverTimestamp() }
-        : {}),
+      status: payable ? 'active' : 'draft',
       updatedAt: FieldValue.serverTimestamp(),
     },
     { merge: true },

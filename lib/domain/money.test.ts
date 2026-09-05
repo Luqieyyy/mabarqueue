@@ -3,7 +3,7 @@ import {
   BPS_DIVISOR,
   MoneyError,
   addSen,
-  calcPlatformFee,
+  calcCheckoutAmounts,
   formatBps,
   formatSen,
   ringgitToSen,
@@ -104,46 +104,81 @@ describe('sen arithmetic', () => {
   });
 });
 
-describe('calcPlatformFee', () => {
-  it('computes the standard 5% cut', () => {
-    const r = calcPlatformFee(toSen(2000), toBps(500));
-    expect(r.platformFeeSen).toBe(100);
-    expect(r.netBeforeProcessingSen).toBe(1900);
-    expect(r.grossSen).toBe(2000);
+describe('calcCheckoutAmounts', () => {
+  it('leaves the creator the FULL listed price — the core business rule', () => {
+    // A creator listing RM10.00 is entitled to RM10.00, not RM9.50.
+    const a = calcCheckoutAmounts(toSen(1000), toBps(500));
+    expect(a.creatorEntitlementSen).toBe(1000);
+    expect(a.baseSen).toBe(1000);
   });
 
-  it('handles fractional-percent tiers with integer arithmetic', () => {
-    // 2.5% — the case a `platformFeePercent: number` field could not express cleanly.
-    expect(calcPlatformFee(toSen(2000), toBps(250)).platformFeeSen).toBe(50);
-    expect(calcPlatformFee(toSen(1000), toBps(300)).platformFeeSen).toBe(30);
+  it('charges the platform fee ON TOP, to the viewer', () => {
+    const a = calcCheckoutAmounts(toSen(1000), toBps(500));
+    expect(a.platformFeeSen).toBe(50);
+    expect(a.totalSen).toBe(1050); // viewer pays more, creator still gets 1000
   });
 
-  it('rounds down so the fee never exceeds gross and rounding favours the streamer', () => {
+  it('never deducts the fee from the creator (regression guard)', () => {
+    // The old model produced creator=950 here. If this ever passes with 950
+    // again, the business model has silently inverted back.
+    for (const bps of [0, 250, 300, 500, 1000]) {
+      const a = calcCheckoutAmounts(toSen(1000), toBps(bps));
+      expect(a.creatorEntitlementSen).toBe(1000);
+      expect(a.totalSen).toBeGreaterThanOrEqual(a.creatorEntitlementSen);
+    }
+  });
+
+  it('supports configurable per-creator rates', () => {
+    expect(calcCheckoutAmounts(toSen(1000), toBps(500)).platformFeeSen).toBe(50); // standard 5%
+    expect(calcCheckoutAmounts(toSen(1000), toBps(300)).platformFeeSen).toBe(30); // partner 3%
+    expect(calcCheckoutAmounts(toSen(1000), toBps(0)).platformFeeSen).toBe(0);    // promotional
+  });
+
+  it('charges the viewer exactly the base on a 0% creator', () => {
+    const a = calcCheckoutAmounts(toSen(1000), toBps(0));
+    expect(a.totalSen).toBe(1000);
+    expect(a.creatorEntitlementSen).toBe(1000);
+    expect(a.platformNetSen).toBe(0);
+  });
+
+  it('rounds the fee down so rounding never inflates the viewer total', () => {
     // RM3.99 @ 5% = 19.95 sen → 19
-    const r = calcPlatformFee(toSen(399), toBps(500));
-    expect(r.platformFeeSen).toBe(19);
-    expect(r.platformFeeSen + r.netBeforeProcessingSen).toBe(399);
+    const a = calcCheckoutAmounts(toSen(399), toBps(500));
+    expect(a.platformFeeSen).toBe(19);
+    expect(a.totalSen).toBe(418);
   });
 
-  it('supports a 0% promotional streamer', () => {
-    const r = calcPlatformFee(toSen(2000), toBps(0));
-    expect(r.platformFeeSen).toBe(0);
-    expect(r.netBeforeProcessingSen).toBe(2000);
-  });
-
-  it('never loses or invents sen', () => {
-    for (const gross of [1, 99, 100, 399, 1000, 2000, 3000, 12_345]) {
-      for (const bps of [0, 250, 300, 500, 1000]) {
-        const r = calcPlatformFee(toSen(gross), toBps(bps));
-        expect(r.platformFeeSen + r.netBeforeProcessingSen).toBe(gross);
-        expect(r.platformFeeSen).toBeLessThanOrEqual(gross);
-        expect(Number.isInteger(r.platformFeeSen)).toBe(true);
+  it('always balances: total = base + platform fee', () => {
+    for (const base of [1, 100, 399, 1000, 2000, 12_345]) {
+      for (const bps of [0, 250, 500, 1000]) {
+        const a = calcCheckoutAmounts(toSen(base), toBps(bps));
+        expect(a.baseSen + a.platformFeeSen).toBe(a.totalSen);
+        expect(a.creatorEntitlementSen).toBe(a.baseSen);
+        expect(Number.isInteger(a.totalSen)).toBe(true);
       }
     }
   });
 
+  it('absorbs the processing fee out of the platform fee, not the creator', () => {
+    // MabarQueue eats the provider cost while CHIP's schedule is unconfirmed.
+    const a = calcCheckoutAmounts(toSen(1000), toBps(500), toSen(30));
+    expect(a.creatorEntitlementSen).toBe(1000); // untouched
+    expect(a.totalSen).toBe(1050);              // viewer unaffected
+    expect(a.platformNetSen).toBe(20);          // 50 fee − 30 processing
+  });
+
+  it('floors platform revenue at zero rather than charging the creator', () => {
+    const a = calcCheckoutAmounts(toSen(1000), toBps(500), toSen(999));
+    expect(a.platformNetSen).toBe(0);
+    expect(a.creatorEntitlementSen).toBe(1000);
+  });
+
+  it('defaults the processing fee to zero — no invented CHIP rate', () => {
+    expect(calcCheckoutAmounts(toSen(1000), toBps(500)).processingFeeSen).toBe(0);
+  });
+
   it('retains the rate used, so historical records stay auditable', () => {
-    expect(calcPlatformFee(toSen(2000), toBps(300)).feeBps).toBe(300);
+    expect(calcCheckoutAmounts(toSen(1000), toBps(300)).feeBps).toBe(300);
   });
 });
 

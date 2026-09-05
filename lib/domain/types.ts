@@ -24,7 +24,6 @@
 import type { Sen } from './money';
 import type { AuthUid, PackageId, Slug, StreamerId } from './ids';
 import type { GameId } from '../games';
-import type { StripeAccountStatus } from './stripe-account-status';
 
 // ─── Timestamps ───────────────────────────────────────────────────────────────
 
@@ -101,21 +100,15 @@ export interface Streamer {
   /** Which game's queue the dashboard and overlay currently show. */
   activeGame: GameId;
 
-  // ─ Stripe Connect. References and capability flags only — never bank
-  //   details, identity documents or any other KYC data, which remain
-  //   exclusively with Stripe.
-  stripeAccountId: string | null;
-  stripeChargesEnabled: boolean;
-  stripePayoutsEnabled: boolean;
-  stripeDetailsSubmitted: boolean;
   /**
-   * Payment readiness derived from the flags above, stored so a read doesn't
-   * have to recompute it. Always written server-side from a Stripe-sourced
-   * account object — never from a client or a redirect.
+   * Whether this creator may take payments on their public page.
+   *
+   * Payments are collected through MabarQueue's own CHIP merchant account, so
+   * a creator needs no payment account of their own to start selling. Payout
+   * onboarding (identity, bank details) is a separate, later step and is
+   * deliberately not required to accept a first payment.
    */
-  stripeAccountStatus: StripeAccountStatus;
-  /** First time Stripe reported charges enabled. Null until then. */
-  stripeOnboardingCompletedAt: TimestampField;
+  payoutOnboardingCompletedAt: TimestampField;
 
   /**
    * Platform fee in basis points (500 = 5%).
@@ -239,8 +232,8 @@ export type PublicPackage = Pick<
 
 // ─── Donations / payments ─────────────────────────────────────────────────────
 
-/** Provider-neutral, so Sociabuzz and Stripe can coexist during migration. */
-export type PaymentProvider = 'stripe' | 'sociabuzz' | 'manual';
+/** Provider-neutral. `stripe` remains only for records written before the CHIP migration. */
+export type PaymentProvider = 'chip' | 'stripe' | 'sociabuzz' | 'manual';
 
 export type DonationStatus =
   | 'pending'
@@ -253,28 +246,48 @@ export type DonationStatus =
 /**
  * A payment and the credits it produced.
  *
- * A reporting mirror of what happened, not a ledger of record: Stripe remains
- * the source of truth for money movement, balances and payout state.
+ * The provider (CHIP) remains the source of truth for money actually moving.
+ * This record is what MabarQueue owes its creators off the back of it, and
+ * every amount is stored explicitly so a payment can be reconciled — or
+ * reversed on refund — without recomputing anything from a rate that may
+ * since have changed.
  */
 export interface Donation {
   donationId: string;
   streamerId: StreamerId;
 
   provider: PaymentProvider;
-  /** Stripe PaymentIntent ID, or the Sociabuzz transaction ID. */
+  /** The CHIP purchase ID (or a legacy provider reference). */
   providerPaymentId: string | null;
 
   packageId: PackageId | null;
   /** Snapshot of the title at purchase time — survives package renames. */
   packageTitle: string | null;
 
-  // ─ Money, all integer sen
-  grossSen: Sen;
+  // ─ Money, all integer sen. See `calcCheckoutAmounts`.
+  /** The creator's listed price — the basis for the entitlement. */
+  baseSen: Sen;
+  /** MabarQueue's service fee, charged to the viewer on top of the base. */
   platformFeeSen: Sen;
-  /** Stripe's fee. Known only after settlement; null until then. */
-  processingFeeSen: Sen | null;
-  /** Gross − platform fee − processing fee. Null until settled. */
-  netSen: Sen | null;
+  /**
+   * The provider's processing cost, absorbed by MabarQueue.
+   *
+   * Zero until CHIP's fee schedule is confirmed — never a guessed number.
+   */
+  processingFeeSen: Sen;
+  /** What the viewer was actually charged: base + platform fee. */
+  totalSen: Sen;
+  /** What the creator is owed. Always the full listed price. */
+  creatorEntitlementSen: Sen;
+  /** MabarQueue's revenue after absorbing the processing cost. */
+  platformNetSen: Sen;
+  /**
+   * Total charged to the viewer.
+   *
+   * Retained alongside `totalSen` because existing records were written under
+   * the previous model, where this field was the only total stored.
+   */
+  grossSen: Sen;
   /** The rate actually applied, retained so historical records stay auditable. */
   feeBps: number;
   currency: 'MYR';
@@ -304,12 +317,72 @@ export interface Donation {
  * A processed provider webhook event, keyed by the **provider's** event ID.
  *
  * This document existing is the idempotency guard: credit allocation reads it
- * and writes it inside the same transaction, so a redelivered Stripe event
+ * and writes it inside the same transaction, so a redelivered provider event
  * cannot grant credits twice. The current code stores `transaction_id` on the
  * queue entry but never checks it, so replays are silently additive.
  */
+// ─── Creator ledger ───────────────────────────────────────────────────────────
+
+/**
+ * What a ledger entry represents.
+ *
+ *   'earning'    a confirmed payment credited the creator their listed price
+ *   'refund'     that payment was reversed; the entitlement is clawed back
+ *   'payout'     funds were sent to the creator (CHIP Send — not yet live)
+ *   'adjustment' a manual correction, always with a reason
+ */
+export type LedgerEntryType = 'earning' | 'refund' | 'payout' | 'adjustment';
+
+/**
+ * An append-only entry in a creator's balance.
+ *
+ * Deliberately not a mutable `balance` field: a running total that is
+ * incremented in place has no history, so a double-processed webhook or a
+ * refund becomes impossible to reconcile after the fact. The balance is
+ * derived by summing entries instead, and every entry points back at the
+ * payment that caused it.
+ *
+ * `amountSen` is signed — positive credits the creator, negative debits them —
+ * so the balance is a plain sum with no special-casing per type.
+ */
+export interface LedgerEntry {
+  entryId: string;
+  streamerId: StreamerId;
+
+  type: LedgerEntryType;
+  /** Signed, in sen. Positive = owed to the creator, negative = deducted. */
+  amountSen: number;
+  currency: 'MYR';
+
+  /** The donation this entry stems from, when there is one. */
+  donationId: string | null;
+  /** The provider payment reference, for reconciling against CHIP. */
+  providerPaymentId: string | null;
+
+  /** Human-readable explanation, required for adjustments. */
+  description: string;
+
+  createdAt: TimestampField;
+}
+
+/**
+ * A creator's derived balance.
+ *
+ * Computed from ledger entries rather than stored, so it can never drift out
+ * of step with the entries that justify it.
+ */
+export interface CreatorBalance {
+  /** Confirmed earnings minus refunds and payouts — what can be withdrawn. */
+  availableSen: number;
+  /** Lifetime gross entitlement credited, before refunds or payouts. */
+  totalEarnedSen: number;
+  /** Total already paid out. */
+  paidOutSen: number;
+  entryCount: number;
+}
+
 export interface PaymentEvent {
-  /** Document ID — Stripe's `evt_...`, or the Sociabuzz transaction ID. */
+  /** Document ID — the CHIP purchase ID, or a legacy provider reference. */
   providerEventId: string;
   provider: PaymentProvider;
   /** e.g. 'checkout.session.completed'. */

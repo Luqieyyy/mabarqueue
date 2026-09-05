@@ -1,42 +1,35 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { stripe } from '../../../../lib/stripe/client';
-import { CONNECT_CURRENCY } from '../../../../lib/stripe/connect';
+import { ChipError, chipConfigured, createPurchase } from '../../../../lib/chip/client';
 import { getStreamerBySlug } from '../../../../lib/admin/streamers-repo';
 import { getPackage } from '../../../../lib/admin/packages-repo';
-import { resolvePlatformFee, savePaymentAttempt } from '../../../../lib/admin/payments-repo';
+import { resolveCheckoutAmounts, savePaymentAttempt } from '../../../../lib/admin/payments-repo';
 import { MIN_PAYMENT_SEN } from '../../../../lib/domain/config';
 import { getGameDefinition } from '../../../../lib/games';
-import { logEvent } from '../../../../lib/observability';
+import { formatSen, toSen } from '../../../../lib/domain/money';
+import { logEvent, logFailure } from '../../../../lib/observability';
+
+export const dynamic = 'force-dynamic';
 
 /**
  * POST /api/payments/create
  *
- * Creates a Stripe Checkout Session for a viewer buying a package.
+ * Creates a CHIP purchase for a viewer and returns the hosted checkout URL.
  *
- * This is the most security-sensitive route in the application, so every
- * monetary value is derived server-side:
+ * The most security-sensitive route in the application, so every monetary
+ * value is derived server-side:
  *
- *   - the client sends only `{ slug, packageId, ign, donorName? }`
- *   - the price and game count come from the package document in Firestore
- *   - the platform fee comes from the streamer document (or the platform
- *     default), computed with integer arithmetic
+ *   - the client sends only `{ slug, packageId | amountSen, ign, donorName? }`
+ *   - the creator's price comes from the package document in Firestore
+ *   - the platform fee comes from the streamer document (or the default)
  *
- * An `amount` or `games` value in the request body is ignored entirely.
- *
- * The charge is a **direct charge** on the streamer's connected account
- * (`stripeAccount` option) with `application_fee_amount` as MabarQueue's cut,
- * so the streamer is merchant of record and viewer funds never pass through
- * the platform's own balance.
+ * An `amount`, `total` or `games` value in the request body is ignored for
+ * package purchases. Fees are shown as their own CHIP line item so the viewer
+ * sees exactly what they're paying and why.
  */
 export async function POST(req: NextRequest) {
   try {
-    // ─── Safety gate ─────────────────────────────────────────────────────
-    // Game credits are granted by the Stripe webhook, which cannot verify
-    // signatures without STRIPE_WEBHOOK_SECRET. Taking a payment while it's
-    // unset would charge the viewer and grant nothing, so checkout is
-    // refused outright rather than risking money-in/nothing-out.
-    if (!process.env.STRIPE_WEBHOOK_SECRET) {
-      logEvent('stripe_checkout_blocked', { reason: 'webhook_secret_not_configured' });
+    if (!chipConfigured()) {
+      logEvent('chip_checkout_blocked', { reason: 'chip_not_configured' });
       return NextResponse.json(
         { success: false, error: 'Payments are not enabled yet. Please try again later.' },
         { status: 503 },
@@ -47,121 +40,139 @@ export async function POST(req: NextRequest) {
 
     const slug = typeof body?.slug === 'string' ? body.slug : '';
     const packageId = typeof body?.packageId === 'string' ? body.packageId : '';
+    const kind = body?.kind === 'donation' ? 'donation' : 'mabar';
     const ign = typeof body?.ign === 'string' ? body.ign.trim() : '';
     const donorNameRaw = typeof body?.donorName === 'string' ? body.donorName.trim() : '';
+    const emailRaw = typeof body?.email === 'string' ? body.email.trim() : '';
+    const message = typeof body?.message === 'string' ? body.message.trim().slice(0, 240) : '';
+    const donationAmountSen = Number.isInteger(body?.amountSen) ? Number(body.amountSen) : 0;
 
-    if (!slug || !packageId) {
+    if (!slug || (kind === 'mabar' && !packageId)) {
       return NextResponse.json(
         { success: false, error: 'slug and packageId are required' },
         { status: 400 },
       );
     }
-    if (!ign) {
+    if (kind === 'mabar' && !ign) {
       return NextResponse.json({ success: false, error: 'IGN is required' }, { status: 400 });
     }
-    if (ign.length > 60) {
-      return NextResponse.json({ success: false, error: 'IGN is too long' }, { status: 400 });
+    if (ign.length > 60 || donorNameRaw.length > 60) {
+      return NextResponse.json({ success: false, error: 'Name is too long' }, { status: 400 });
     }
 
-    // ─── Resolve streamer and confirm they can actually be paid ──────────
+    // ─── Resolve streamer ────────────────────────────────────────────────
     const streamer = await getStreamerBySlug(slug);
     if (!streamer) {
       return NextResponse.json({ success: false, error: 'Streamer not found' }, { status: 404 });
-    }
-    if (!streamer.stripeAccountId || !streamer.stripeChargesEnabled) {
-      return NextResponse.json(
-        { success: false, error: 'This streamer is not accepting payments yet.' },
-        { status: 409 },
-      );
     }
     if (streamer.status === 'suspended') {
       return NextResponse.json({ success: false, error: 'Streamer unavailable' }, { status: 403 });
     }
 
-    // ─── Authoritative package lookup, scoped to this streamer ───────────
-    // Scoping by streamerId is what prevents a packageId from another
-    // workspace being used to buy at a different price.
-    const pkg = await getPackage(streamer.streamerId, packageId);
-    if (!pkg) {
+    // ─── Authoritative price, scoped to this streamer ────────────────────
+    // Scoping the package lookup by streamerId is what stops a packageId from
+    // another workspace being used to buy at a different price.
+    const pkg = kind === 'mabar' ? await getPackage(streamer.streamerId, packageId) : null;
+    if (kind === 'mabar' && !pkg) {
       return NextResponse.json({ success: false, error: 'Package not found' }, { status: 404 });
     }
-    if (!pkg.enabled) {
+    if (pkg && !pkg.enabled) {
       return NextResponse.json(
         { success: false, error: 'This package is no longer available.' },
         { status: 409 },
       );
     }
-    if (pkg.priceSen < MIN_PAYMENT_SEN) {
-      return NextResponse.json(
-        { success: false, error: 'This package is not purchasable.' },
-        { status: 409 },
-      );
+
+    const basePriceSen = kind === 'donation' ? donationAmountSen : pkg!.priceSen;
+    if (!Number.isInteger(basePriceSen) || basePriceSen < MIN_PAYMENT_SEN || basePriceSen > 10_000_000) {
+      return NextResponse.json({ success: false, error: 'Invalid amount.' }, { status: 400 });
     }
 
-    // ─── Server-side fee calculation ─────────────────────────────────────
-    const fee = resolvePlatformFee(pkg.priceSen, streamer.platformFeeBps);
-
-    // Stripe requires the application fee to be strictly less than the charge.
-    const applicationFeeSen = Math.min(fee.platformFeeSen, Math.max(0, fee.grossSen - 1));
+    // ─── Server-side amounts ─────────────────────────────────────────────
+    const amounts = resolveCheckoutAmounts(basePriceSen, streamer.platformFeeBps);
 
     const origin = req.nextUrl.origin;
     const gameDef = getGameDefinition(streamer.activeGame);
+    const parsed = kind === 'mabar' ? gameDef.parseMessage(ign) : null;
 
-    const session = await stripe().checkout.sessions.create(
-      {
-        mode: 'payment',
-        line_items: [
-          {
-            quantity: 1,
-            price_data: {
-              currency: CONNECT_CURRENCY,
-              unit_amount: pkg.priceSen,
-              product_data: {
-                name: pkg.title,
-                description:
-                  pkg.description ||
-                  `${pkg.games} game${pkg.games === 1 ? '' : 's'} with ${streamer.displayName}`,
-              },
-            },
-          },
-        ],
-        payment_intent_data: {
-          application_fee_amount: applicationFeeSen,
-        },
-        // Only identifiers go to Stripe — the IGN and player ID stay in our
-        // own payment_attempts record, keyed by session ID.
-        metadata: {
-          streamerId: streamer.streamerId,
-          packageId: pkg.packageId,
-        },
-        success_url: `${origin}/streamer/${streamer.slug}?paid=1&session_id={CHECKOUT_SESSION_ID}`,
-        cancel_url: `${origin}/streamer/${streamer.slug}?cancelled=1`,
-      },
-      // Direct charge: created on the connected account.
-      { stripeAccount: streamer.stripeAccountId },
-    );
+    const baseLabel =
+      kind === 'donation' ? `Support ${streamer.displayName}` : `${pkg!.title} — ${streamer.displayName}`;
 
-    // Parse a game-specific player ID out of the IGN field if present, using
-    // the streamer's active game parser (e.g. a Mobile Legends numeric ID).
-    const parsed = gameDef.parseMessage(ign);
+    // The fee is its own line so the viewer can see the breakdown on CHIP's
+    // hosted page rather than being shown one opaque total.
+    const products = [{ name: baseLabel, price: amounts.baseSen }];
+    if (amounts.platformFeeSen > 0) {
+      products.push({ name: 'MabarQueue service fee', price: amounts.platformFeeSen });
+    }
 
-    await savePaymentAttempt(session.id, {
+    const purchase = await createPurchase({
+      // CHIP requires a client email. Viewers aren't asked to register, so a
+      // supplied address is used when present and CHIP collects one on its
+      // own hosted page otherwise.
+      email: emailRaw || 'viewer@mabarqueue.com',
+      fullName: donorNameRaw || parsed?.ign || ign || undefined,
+      products,
+      reference: `${streamer.streamerId}:${kind}`,
+      successRedirect: `${origin}/streamer/${streamer.slug}?${kind === 'donation' ? 'donated' : 'paid'}=1`,
+      failureRedirect: `${origin}/streamer/${streamer.slug}?failed=1`,
+      cancelRedirect: `${origin}/streamer/${streamer.slug}?cancelled=1`,
+      successCallback: `${origin}/api/webhooks/chip`,
+      metadata: { streamerId: streamer.streamerId, kind },
+    });
+
+    // Persist the authoritative amounts keyed by the purchase ID, so the
+    // callback never has to trust anything echoed back to it.
+    await savePaymentAttempt(purchase.id, {
+      kind,
       streamerId: streamer.streamerId,
-      packageId: pkg.packageId,
-      packageTitle: pkg.title,
-      priceSen: pkg.priceSen,
-      games: pkg.games,
-      feeBps: fee.feeBps,
-      platformFeeSen: applicationFeeSen,
-      ign: parsed?.ign || ign,
-      playerId: parsed?.player_id ?? null,
-      donorName: donorNameRaw || parsed?.ign || ign,
+      packageId: pkg?.packageId ?? null,
+      packageTitle: pkg?.title ?? (kind === 'donation' ? 'Donation' : null),
+      baseSen: amounts.baseSen,
+      platformFeeSen: amounts.platformFeeSen,
+      processingFeeSen: amounts.processingFeeSen,
+      totalSen: amounts.totalSen,
+      creatorEntitlementSen: amounts.creatorEntitlementSen,
+      platformNetSen: amounts.platformNetSen,
+      feeBps: amounts.feeBps,
+      games: pkg?.games ?? 0,
+      ign: kind === 'mabar' ? parsed?.ign || ign : '',
+      playerId: kind === 'mabar' ? (parsed?.player_id ?? null) : null,
+      donorName: donorNameRaw || parsed?.ign || ign || 'Anonymous supporter',
+      message: kind === 'donation' ? message : null,
       game: streamer.activeGame,
     });
 
-    return NextResponse.json({ success: true, url: session.url, sessionId: session.id });
+    logEvent('chip_purchase_created', {
+      streamerId: streamer.streamerId,
+      purchaseId: purchase.id,
+      kind,
+      totalSen: amounts.totalSen,
+      isTest: purchase.is_test,
+    });
+
+    return NextResponse.json({
+      success: true,
+      url: purchase.checkout_url,
+      purchaseId: purchase.id,
+      // Returned so the UI can show the breakdown before redirecting.
+      breakdown: {
+        baseSen: amounts.baseSen,
+        platformFeeSen: amounts.platformFeeSen,
+        totalSen: amounts.totalSen,
+        baseFormatted: formatSen(toSen(amounts.baseSen)),
+        platformFeeFormatted: formatSen(toSen(amounts.platformFeeSen)),
+        totalFormatted: formatSen(toSen(amounts.totalSen)),
+      },
+    });
   } catch (err) {
-    console.error('[payments/create] Error:', err);
+    logFailure('chip_purchase_failed', err, {});
+    if (err instanceof ChipError) {
+      // Safe message only — CHIP's raw error stays in the server log.
+      return NextResponse.json(
+        { success: false, error: 'Could not start checkout. Please try again.' },
+        { status: err.status },
+      );
+    }
     return NextResponse.json({ success: false, error: 'Could not start checkout' }, { status: 500 });
   }
 }

@@ -53,7 +53,7 @@ export const RESERVED_SLUGS: ReadonlySet<string> = new Set([
   'api', 'dashboard', 'login', 'logout', 'signup', 'register',
   'overlay', 'queue', 'streamer', 'streamers', 'settings', 'packages',
   'earnings', 'payments', 'payment', 'checkout', 'webhook', 'webhooks',
-  'onboard', 'onboarding', 'connect', 'stripe', 'sociabuzz',
+  'onboard', 'onboarding', 'verify-email', 'connect', 'chip', 'stripe', 'sociabuzz',
   // platform identity / impersonation risks
   'mabarqueue', 'mabar', 'admin', 'administrator', 'root', 'system',
   'support', 'help', 'official', 'staff', 'team', 'moderator', 'mod',

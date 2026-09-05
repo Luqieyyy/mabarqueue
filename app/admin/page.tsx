@@ -35,7 +35,7 @@ interface AdminUserRow {
 
 interface SaleRecord {
   id: string;
-  source: 'legacy' | 'stripe';
+  source: 'legacy' | 'workspace';
   ownerId: string;
   streamerId: string | null;
   donorName: string;

@@ -19,7 +19,12 @@ interface PublicPackage {
   packageId: string;
   title: string;
   description: string;
+  /** The creator's listed price — what they receive in full. */
   priceSen: number;
+  /** Service fee added on top, charged to the viewer. */
+  platformFeeSen: number;
+  /** What the viewer actually pays. */
+  totalSen: number;
   games: number;
 }
 
@@ -56,6 +61,7 @@ function StreamerContent() {
   const slug = typeof params?.slug === 'string' ? params.slug : '';
   const searchParams = useSearchParams();
   const paid = searchParams.get('paid') === '1';
+  const donated = searchParams.get('donated') === '1';
   const cancelled = searchParams.get('cancelled') === '1';
 
   const [data, setData] = useState<PublicPageData | null>(null);
@@ -65,6 +71,9 @@ function StreamerContent() {
   const [ign, setIgn] = useState('');
   const [donorName, setDonorName] = useState('');
   const [selected, setSelected] = useState<string | null>(null);
+  const [mode, setMode] = useState<'mabar' | 'donation'>('mabar');
+  const [donationAmount, setDonationAmount] = useState('5');
+  const [message, setMessage] = useState('');
   const [error, setError] = useState('');
   const [submitting, setSubmitting] = useState(false);
 
@@ -85,8 +94,8 @@ function StreamerContent() {
   }, [load]);
 
   async function handlePay() {
-    if (!data || !selected) return;
-    if (!ign.trim()) {
+    if (!data || (mode === 'mabar' && !selected)) return;
+    if (mode === 'mabar' && !ign.trim()) {
       setError(`Please enter your ${data.game.idLabel}.`);
       return;
     }
@@ -97,8 +106,11 @@ function StreamerContent() {
         method: 'POST',
         body: {
           slug,
-          packageId: selected,
-          ign: ign.trim(),
+          kind: mode,
+          ...(mode === 'mabar' ? { packageId: selected, ign: ign.trim() } : {
+            amountSen: Math.round(Number(donationAmount) * 100),
+            message: message.trim(),
+          }),
           ...(donorName.trim() ? { donorName: donorName.trim() } : {}),
         },
       });
@@ -129,6 +141,7 @@ function StreamerContent() {
   }
 
   const { streamer, game, packages, playing, waiting } = data;
+  const selectedPackage = packages.find((p) => p.packageId === selected) ?? null;
   const initial = (streamer.displayName || '?')[0].toUpperCase();
 
   return (
@@ -151,6 +164,13 @@ function StreamerContent() {
           >
             <p className="text-[11px] font-black tracking-widest text-emerald-400 uppercase mb-1">Payment received</p>
             <p className="text-sm text-gray-400">You&apos;ll appear in the queue shortly.</p>
+          </div>
+        )}
+
+        {donated && (
+          <div className="rounded-2xl px-5 py-4" style={{ background: 'rgba(16,185,129,0.08)', border: '1px solid rgba(16,185,129,0.25)' }}>
+            <p className="text-[11px] font-black tracking-widest text-emerald-400 uppercase mb-1">Thank you for your support</p>
+            <p className="text-sm text-gray-400">Your donation was received and you were not added to the queue.</p>
           </div>
         )}
 
@@ -203,7 +223,13 @@ function StreamerContent() {
 
         {/* ── Purchase form ──────────────────────────────────────────────── */}
         <div className="rounded-2xl p-5 space-y-4" style={CARD_STYLE}>
-          <span className="text-[11px] font-black tracking-widest text-violet-400 uppercase">Join the queue</span>
+          <div className="grid grid-cols-2 rounded-xl bg-white/[0.04] p-1">
+            <button type="button" onClick={() => { setMode('mabar'); setError(''); }} className={`rounded-lg py-2.5 text-sm font-semibold ${mode === 'mabar' ? 'bg-violet-600 text-white' : 'text-gray-400 hover:text-white'}`}>Mabar</button>
+            <button type="button" onClick={() => { setMode('donation'); setError(''); }} className={`rounded-lg py-2.5 text-sm font-semibold ${mode === 'donation' ? 'bg-violet-600 text-white' : 'text-gray-400 hover:text-white'}`}>Donate</button>
+          </div>
+
+          <div className={mode === 'mabar' ? 'space-y-4' : 'hidden'}>
+          <span className="text-[11px] font-black tracking-widest text-violet-400 uppercase">Join the mabar queue</span>
 
           <div className="space-y-1.5">
             <label htmlFor="ign" className="block text-xs font-bold text-gray-400 uppercase tracking-wider">
@@ -256,11 +282,50 @@ function StreamerContent() {
                   >
                     <p className="text-sm font-bold text-white">{p.title}</p>
                     {p.description && <p className="text-[11px] text-gray-500 mt-0.5">{p.description}</p>}
-                    <p className="text-base font-black text-violet-300 mt-2">{formatSen(toSen(p.priceSen))}</p>
+                    <p className="text-base font-black text-violet-300 mt-2">{formatSen(toSen(p.totalSen))}</p>
                     <p className="text-[11px] text-gray-500">{p.games} {p.games === 1 ? 'game' : 'games'}</p>
+                    {p.platformFeeSen > 0 && (
+                      <p className="text-[10px] text-gray-600 mt-1">
+                        {formatSen(toSen(p.priceSen))} + {formatSen(toSen(p.platformFeeSen))} service fee
+                      </p>
+                    )}
                   </button>
                 );
               })}
+            </div>
+          )}
+          </div>
+
+          {mode === 'donation' && (
+            <div className="space-y-4">
+              <div className="space-y-1.5">
+                <label htmlFor="donationAmount" className="block text-xs font-bold text-gray-400 uppercase tracking-wider">Donation amount (RM)</label>
+                <input id="donationAmount" type="number" min="1" max="100000" step="1" value={donationAmount} onChange={(e) => { setDonationAmount(e.target.value); setError(''); }} disabled={!streamer.acceptingPayments} className="w-full rounded-xl px-4 py-3 text-sm text-white outline-none focus:border-violet-500 disabled:opacity-50" style={{ background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.09)' }} />
+              </div>
+              <div className="space-y-1.5">
+                <label htmlFor="donationMessage" className="block text-xs font-bold text-gray-400 uppercase tracking-wider">Message <span className="font-normal text-gray-600">(optional)</span></label>
+                <textarea id="donationMessage" rows={3} maxLength={240} value={message} onChange={(e) => setMessage(e.target.value)} disabled={!streamer.acceptingPayments} placeholder="Write a message for the creator" className="w-full resize-none rounded-xl px-4 py-3 text-sm text-white placeholder-gray-600 outline-none focus:border-violet-500 disabled:opacity-50" style={{ background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.09)' }} />
+                <p className="text-[11px] text-gray-600">This supports the creator and will not add you to the queue.</p>
+              </div>
+            </div>
+          )}
+
+          {mode === 'mabar' && selectedPackage && (
+            <div className="rounded-xl px-4 py-3 space-y-1.5 text-xs" style={{ background: 'rgba(255,255,255,0.02)', border: '1px solid rgba(255,255,255,0.06)' }}>
+              <div className="flex justify-between text-gray-400">
+                <span>{selectedPackage.title}</span>
+                <span>{formatSen(toSen(selectedPackage.priceSen))}</span>
+              </div>
+              {selectedPackage.platformFeeSen > 0 && (
+                <div className="flex justify-between text-gray-500">
+                  <span>Service fee</span>
+                  <span>{formatSen(toSen(selectedPackage.platformFeeSen))}</span>
+                </div>
+              )}
+              <div className="flex justify-between pt-1.5 font-bold text-white" style={{ borderTop: '1px solid rgba(255,255,255,0.07)' }}>
+                <span>Total</span>
+                <span>{formatSen(toSen(selectedPackage.totalSen))}</span>
+              </div>
             </div>
           )}
 
@@ -269,10 +334,10 @@ function StreamerContent() {
           <button
             type="button"
             onClick={() => void handlePay()}
-            disabled={!streamer.acceptingPayments || !selected || submitting}
+            disabled={!streamer.acceptingPayments || submitting || (mode === 'mabar' ? !selected : !Number.isFinite(Number(donationAmount)) || Number(donationAmount) < 1)}
             className="w-full rounded-xl py-3 text-sm font-black uppercase tracking-widest text-white bg-violet-600 hover:bg-violet-500 disabled:opacity-40 disabled:hover:bg-violet-600 transition-colors"
           >
-            {submitting ? 'Redirecting…' : 'Pay & join queue'}
+            {submitting ? 'Redirecting…' : mode === 'mabar' ? 'Pay & join queue' : 'Donate without joining queue'}
           </button>
         </div>
 

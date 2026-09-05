@@ -28,12 +28,17 @@ export function historyCol(streamerId: string) {
   return streamerDoc(streamerId).collection('history');
 }
 
+/** Append-only creator balance entries. See `LedgerEntry`. */
+export function ledgerCol(streamerId: string) {
+  return streamerDoc(streamerId).collection('ledger');
+}
+
 /** Keyed by the payment provider's own event ID — the idempotency guard. */
 export function paymentEventDoc(streamerId: string, providerEventId: string) {
   return streamerDoc(streamerId).collection('payment_events').doc(providerEventId);
 }
 
-/** Pending checkout attempts, keyed by Stripe Checkout Session ID. */
+/** Pending checkout attempts, keyed by CHIP purchase ID. */
 export function paymentAttemptDoc(streamerId: string, sessionId: string) {
   return streamerDoc(streamerId).collection('payment_attempts').doc(sessionId);
 }

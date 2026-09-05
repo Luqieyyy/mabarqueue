@@ -3,24 +3,27 @@
  *
  * Emits one JSON line per event so logs stay queryable in Vercel. Event names
  * are a closed union, which keeps them greppable and stops near-duplicates
- * ("stripe_onboard_started" vs "stripe_onboarding_started") accumulating.
+ * ("chip_purchase_made" vs "chip_purchase_created") accumulating.
  *
  * Never pass bank details, identity documents, KYC data, secrets, or raw
- * provider responses. Stripe account IDs are included deliberately — they're
+ * provider responses. CHIP purchase IDs are included deliberately — they're
  * operational identifiers needed to trace an issue, and are never exposed to
  * a public page.
  */
 
 export type AppEvent =
-  | 'stripe_connected_account_created'
-  | 'stripe_connected_account_reused'
-  | 'stripe_onboarding_link_created'
-  | 'stripe_onboarding_link_refreshed'
-  | 'stripe_account_status_synced'
-  | 'stripe_fpx_capability_checked'
-  | 'stripe_onboarding_failed'
-  | 'stripe_dashboard_access_requested'
-  | 'stripe_checkout_blocked';
+  // CHIP Collect
+  | 'chip_purchase_created'
+  | 'chip_purchase_failed'
+  | 'chip_checkout_blocked'
+  | 'chip_callback_rejected'
+  | 'chip_callback_failed'
+  | 'chip_callback_ignored'
+  | 'chip_callback_duplicate'
+  | 'chip_callback_unfulfilled'
+  | 'chip_payment_fulfilled'
+  | 'chip_payment_unsuccessful'
+  | 'creator_payout_onboarding_updated';
 
 type Scalar = string | number | boolean | null | undefined;
 

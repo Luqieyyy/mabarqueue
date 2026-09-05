@@ -4,22 +4,17 @@
  * This is the first piece of the multi-tenant identity model from
  * `lib/domain/types.ts`: `streamers/{streamerId}` as the tenant boundary,
  * `slugs/{slug}` enforcing uniqueness, decoupled from `users/{authUid}`
- * (the person). Nothing here touches the legacy `users/{emailPrefix}/...`
- * data the live app still reads — this is purely additive until the
- * migration script (Phase 6) and the slug-based public pages (Phase 8)
- * switch reads over.
+ * (the person). Existing owned legacy dashboards retain their paths; new
+ * dashboards are provisioned under users/{authUid} for collision-free access.
+ * Both dashboard and workspace starter packages are seeded atomically.
  */
 
 import 'server-only';
 import { FieldValue } from 'firebase-admin/firestore';
 import { adminDb } from '../firebase-admin';
 import { validateSlug, type AuthUid, type Slug, type StreamerId } from '../domain/ids';
-import { DEFAULT_GAME } from '../games';
+import { DEFAULT_GAME, getGameDefinition, type GameId } from '../games';
 import { DEFAULT_PACKAGES, DEFAULT_PLATFORM_FEE_BPS } from '../domain/config';
-import {
-  deriveStripeAccountStatus,
-  type StripeAccountStatus,
-} from '../domain/stripe-account-status';
 import type { Streamer, StreamerStatus } from '../domain/types';
 
 function streamersCol() {
@@ -33,7 +28,7 @@ function usersCol() {
 }
 
 export type CreateStreamerError =
-  | { ok: false; reason: 'invalid-slug'; message: string }
+  | { ok: false; reason: 'invalid-slug' | 'invalid-name'; message: string }
   | { ok: false; reason: 'slug-taken'; message: string }
   | { ok: false; reason: 'already-has-streamer'; message: string; streamerId: string };
 
@@ -54,7 +49,11 @@ export async function createStreamer(
   authUid: AuthUid,
   displayName: string,
   requestedSlug: string,
+  email: string,
+  activeGame: GameId = DEFAULT_GAME,
 ): Promise<CreateStreamerResult> {
+  displayName = displayName.trim();
+  if (!displayName || displayName.length > 60) return { ok: false, reason: 'invalid-name', message: 'Creator name must contain 1–60 characters.' };
   const validation = validateSlug(requestedSlug);
   if (!validation.ok) {
     return { ok: false, reason: 'invalid-slug', message: validation.message };
@@ -65,11 +64,16 @@ export async function createStreamer(
   const userRef = usersCol().doc(authUid);
   const slugRef = slugsCol().doc(slug);
   const streamerRef = streamersCol().doc();
+  const legacyPrefix = email.split('@')[0].toLowerCase().replace(/[^a-z0-9_]/g, '_');
+  const legacyRef = usersCol().doc(legacyPrefix);
 
   const result = await db.runTransaction(async (tx) => {
-    const [userSnap, slugSnap] = await Promise.all([tx.get(userRef), tx.get(slugRef)]);
+    const [userSnap, slugSnap, legacySnap, owned] = await Promise.all([
+      tx.get(userRef), tx.get(slugRef), tx.get(legacyRef),
+      tx.get(streamersCol().where('ownerUid', '==', authUid).limit(1)),
+    ]);
 
-    const existingStreamerId = userSnap.data()?.primaryStreamerId as string | undefined;
+    const existingStreamerId = (userSnap.data()?.primaryStreamerId || owned.docs[0]?.id) as string | undefined;
     if (existingStreamerId) {
       return {
         ok: false as const,
@@ -87,6 +91,9 @@ export async function createStreamer(
       };
     }
 
+    // Preserve an owned legacy dashboard; new accounts use collision-free UID paths.
+    const dashboardRef = legacySnap.exists && legacySnap.data()?.uid === authUid ? legacyRef : userRef;
+    const dashboardSnap = dashboardRef.path === legacyRef.path ? legacySnap : userSnap;
     const now = FieldValue.serverTimestamp();
     const streamerData = {
       ownerUid: authUid,
@@ -95,24 +102,49 @@ export async function createStreamer(
       avatarUrl: null,
       bio: null,
       status: 'draft' as StreamerStatus,
-      activeGame: DEFAULT_GAME,
-      stripeAccountId: null,
-      stripeChargesEnabled: false,
-      stripePayoutsEnabled: false,
-      stripeDetailsSubmitted: false,
-      stripeAccountStatus: 'not_connected' as StripeAccountStatus,
-      stripeOnboardingCompletedAt: null,
+      activeGame,
+      // Payments are collected through MabarQueue's own merchant account, so
+      // a new creator can sell immediately; payout onboarding comes later.
+      payoutOnboardingCompletedAt: null,
       // Platform-controlled. Written here only; no streamer-facing route
       // updates it, and Firestore rules deny every client write to this doc.
       platformFeeBps: DEFAULT_PLATFORM_FEE_BPS as number,
-      legacyUsername: null,
+      legacyUsername: dashboardRef.id,
       createdAt: now,
       updatedAt: now,
     };
 
     tx.set(streamerRef, streamerData);
     tx.set(slugRef, { streamerId: streamerRef.id, createdAt: now });
-    tx.set(userRef, { primaryStreamerId: streamerRef.id, updatedAt: now }, { merge: true });
+    const profile = {
+      uid: authUid, authUid, email, displayName, name: displayName,
+      role: userSnap.data()?.role === 'admin' || (legacySnap.data()?.uid === authUid && legacySnap.data()?.role === 'admin') ? 'admin' : 'streamer',
+      photoURL: userSnap.data()?.photoURL ?? null,
+      legacyUsername: dashboardRef.id, primaryStreamerId: streamerRef.id,
+      updatedAt: now, ...(!userSnap.exists ? { createdAt: now } : {}),
+    };
+    tx.set(userRef, profile, { merge: true });
+    if (dashboardRef.path !== userRef.path) {
+      tx.set(dashboardRef, { primaryStreamerId: streamerRef.id, updatedAt: now }, { merge: true });
+    }
+    // Legacy UI still reads these collections. Seed only for a new dashboard.
+    if (!dashboardSnap.exists) {
+      tx.set(dashboardRef.collection('settings').doc('game'), { activeGame });
+      tx.set(dashboardRef.collection('settings').doc('rates'), {
+        tiers: DEFAULT_PACKAGES.map((p) => ({ amount: p.priceSen / 100, games: p.games })),
+      });
+      tx.set(dashboardRef.collection('settings').doc('features'), {
+        mabarQueue: true,
+        donations: true,
+        commentAlbum: getGameDefinition(activeGame).capabilities.commentAlbum,
+      });
+      DEFAULT_PACKAGES.forEach((pkg, index) => {
+        tx.set(dashboardRef.collection('packages').doc(pkg.title), {
+          title: pkg.title, description: pkg.description, price: pkg.priceSen / 100,
+          matchCount: pkg.games, isActive: true, sortOrder: index, createdAt: now, updatedAt: now,
+        });
+      });
+    }
 
     // Seed starter packages in the same transaction, so a new workspace's
     // public page is never empty.
@@ -152,23 +184,6 @@ export async function getStreamerByOwner(authUid: AuthUid): Promise<Streamer | n
   return docToStreamer(snap.docs[0]);
 }
 
-/**
- * Resolves a streamer by their Stripe connected account ID.
- *
- * Used by the Connect webhook, where `account.updated` events identify the
- * account but carry no MabarQueue identifiers.
- */
-export async function getStreamerByStripeAccount(
-  stripeAccountId: string,
-): Promise<Streamer | null> {
-  const snap = await streamersCol()
-    .where('stripeAccountId', '==', stripeAccountId)
-    .limit(1)
-    .get();
-  if (snap.empty) return null;
-  return docToStreamer(snap.docs[0]);
-}
-
 /** Resolves a streamer by internal ID. */
 export async function getStreamerById(streamerId: string): Promise<Streamer | null> {
   const snap = await streamersCol().doc(streamerId).get();
@@ -202,19 +217,7 @@ function docToStreamer(doc: FirebaseFirestore.DocumentSnapshot): Streamer {
     bio: d.bio ?? null,
     status: d.status,
     activeGame: d.activeGame,
-    stripeAccountId: d.stripeAccountId ?? null,
-    stripeChargesEnabled: Boolean(d.stripeChargesEnabled),
-    stripePayoutsEnabled: Boolean(d.stripePayoutsEnabled),
-    stripeDetailsSubmitted: Boolean(d.stripeDetailsSubmitted),
-    // Recomputed rather than trusted, so a legacy document written before
-    // this field existed still reports a correct status.
-    stripeAccountStatus: deriveStripeAccountStatus({
-      stripeAccountId: d.stripeAccountId ?? null,
-      stripeDetailsSubmitted: Boolean(d.stripeDetailsSubmitted),
-      stripeChargesEnabled: Boolean(d.stripeChargesEnabled),
-      stripePayoutsEnabled: Boolean(d.stripePayoutsEnabled),
-    }),
-    stripeOnboardingCompletedAt: d.stripeOnboardingCompletedAt ?? null,
+    payoutOnboardingCompletedAt: d.payoutOnboardingCompletedAt ?? null,
     platformFeeBps: d.platformFeeBps ?? null,
     legacyUsername: d.legacyUsername ?? null,
     createdAt: d.createdAt ?? null,

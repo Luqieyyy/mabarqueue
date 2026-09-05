@@ -263,7 +263,7 @@ export async function removePlayer(
   });
 }
 
-// ─── Paid admission (called from the Stripe webhook) ─────────────────────────
+// ─── Paid admission (called from the CHIP callback) ──────────────────────────
 
 export interface GrantCreditsInput {
   streamerId: StreamerId;
@@ -284,7 +284,7 @@ export type GrantCreditsResult =
 /**
  * Grants paid credits and places the viewer, atomically.
  *
- * Must be called from inside an already-idempotent context (the Stripe
+ * Must be called from inside an already-idempotent context (the CHIP
  * webhook checks `payment_events/{eventId}` in its own transaction) — this
  * function assumes the payment has been confirmed and is being applied once.
  */

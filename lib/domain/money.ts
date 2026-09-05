@@ -3,7 +3,7 @@
  *
  * All monetary values in the system are stored and computed as **sen**
  * (1 MYR = 100 sen) using JavaScript integers. Floating-point ringgit values
- * never reach Firestore, Stripe, or a fee calculation.
+ * never reach Firestore, the payment provider, or a fee calculation.
  *
  * Platform fees are expressed in **basis points** (bps) rather than percent so
  * that fractional tiers stay integral: 5% = 500 bps, 2.5% = 250 bps.
@@ -112,41 +112,72 @@ export function sumSen(values: readonly Sen[]): Sen {
   return values.reduce<Sen>((acc, v) => addSen(acc, v), toSen(0));
 }
 
-// ─── Platform fee ─────────────────────────────────────────────────────────────
+// ─── Checkout amounts ─────────────────────────────────────────────────────────
 
-export interface FeeBreakdown {
-  /** What the viewer paid. */
-  grossSen: Sen;
-  /** MabarQueue's cut. */
+/**
+ * The five monetary components of a viewer payment.
+ *
+ * MabarQueue charges its fee **on top of** the creator's listed price rather
+ * than deducting it: a creator who lists RM10.00 is entitled to RM10.00, and
+ * the viewer pays RM10.00 + fees. Deducting the fee instead — leaving the
+ * creator RM9.50 on a RM10.00 listing — is explicitly not the business model.
+ */
+export interface CheckoutAmounts {
+  /** The creator's listed price. The basis for everything else. */
+  baseSen: Sen;
+  /** MabarQueue's service fee, added on top and paid by the viewer. */
   platformFeeSen: Sen;
   /**
-   * Gross minus the platform fee.
+   * The payment provider's own cost.
    *
-   * NOT the streamer's final payout — the payment processor's own fee is
-   * deducted separately by Stripe and is not known at this point.
+   * Zero while CHIP's actual fee schedule is unconfirmed — MabarQueue absorbs
+   * processing costs out of its own platform fee for now, so the viewer is
+   * never charged a number we invented. See `platformNetSen`.
    */
-  netBeforeProcessingSen: Sen;
+  processingFeeSen: Sen;
+  /** What the viewer is actually charged: base + platform fee. */
+  totalSen: Sen;
+  /** What the creator is owed. Always the full listed price. */
+  creatorEntitlementSen: Sen;
+  /**
+   * MabarQueue's revenue after absorbing the processing cost.
+   *
+   * Can reach zero but never goes negative; if processing ever exceeds the
+   * platform fee, the platform simply earns nothing on that payment rather
+   * than clawing anything back from the creator.
+   */
+  platformNetSen: Sen;
   /** The rate this breakdown was computed with, retained for auditability. */
   feeBps: Bps;
 }
 
 /**
- * Calculates the platform fee on a gross amount.
+ * Computes every amount for a checkout from the creator's listed price.
  *
- * Rounds **down** so the fee can never exceed the gross amount, and so
- * rounding always favours the streamer.
+ * The platform fee rounds **down**, so rounding never inflates what the
+ * viewer is charged.
  *
- *   calcPlatformFee(2000, 500) → fee 100  (RM20 @ 5%  → RM1.00)
- *   calcPlatformFee(2000, 250) → fee  50  (RM20 @ 2.5% → RM0.50)
- *   calcPlatformFee(399,  500) → fee  19  (RM3.99 @ 5% → RM0.19, floored)
- *   calcPlatformFee(2000, 0)   → fee   0  (promotional streamer)
+ *   calcCheckoutAmounts(1000, 500) → base 1000, fee  50, total 1050, creator 1000
+ *   calcCheckoutAmounts(1000, 300) → base 1000, fee  30, total 1030, creator 1000
+ *   calcCheckoutAmounts(1000,   0) → base 1000, fee   0, total 1000, creator 1000
+ *   calcCheckoutAmounts(2000, 250) → base 2000, fee  50, total 2050, creator 2000
  */
-export function calcPlatformFee(grossSen: Sen, feeBps: Bps): FeeBreakdown {
-  const platformFeeSen = toSen(Math.floor((grossSen * feeBps) / BPS_DIVISOR));
+export function calcCheckoutAmounts(
+  baseSen: Sen,
+  feeBps: Bps,
+  processingFeeSen: Sen = toSen(0),
+): CheckoutAmounts {
+  const platformFeeSen = toSen(Math.floor((baseSen * feeBps) / BPS_DIVISOR));
+
   return {
-    grossSen,
+    baseSen,
     platformFeeSen,
-    netBeforeProcessingSen: subSen(grossSen, platformFeeSen),
+    processingFeeSen,
+    totalSen: addSen(baseSen, platformFeeSen),
+    // The whole point of the model: entitlement tracks the listing, untouched
+    // by any fee.
+    creatorEntitlementSen: baseSen,
+    platformNetSen: subSen(platformFeeSen, processingFeeSen),
     feeBps,
   };
 }

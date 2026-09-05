@@ -6,19 +6,12 @@ import Link from 'next/link';
 import { useAuth } from '../../../lib/auth';
 import { apiFetch, ApiError } from '../../../lib/api-client';
 import { formatSen, toSen } from '../../../lib/domain/money';
-import {
-  deriveStripeAccountStatus,
-  statusCopy,
-} from '../../../lib/domain/stripe-account-status';
+import Navbar from '../../../components/Navbar';
 
 interface Streamer {
   streamerId: string;
   displayName: string;
   slug: string;
-  stripeAccountId: string | null;
-  stripeChargesEnabled: boolean;
-  stripePayoutsEnabled: boolean;
-  stripeDetailsSubmitted: boolean;
 }
 
 interface GamePackage {
@@ -32,10 +25,16 @@ interface GamePackage {
 }
 
 interface EarningsBucket {
-  grossFormatted: string;
+  earnedFormatted: string;
+  totalChargedFormatted: string;
   platformFeeFormatted: string;
-  netBeforeProcessingFormatted: string;
   paymentCount: number;
+}
+
+interface Balance {
+  availableFormatted: string;
+  totalEarnedFormatted: string;
+  paidOutFormatted: string;
 }
 
 interface Earnings {
@@ -43,6 +42,7 @@ interface Earnings {
   today: EarningsBucket;
   month: EarningsBucket;
   allTime: EarningsBucket;
+  balance: Balance;
 }
 
 function PaymentsContent() {
@@ -95,41 +95,9 @@ function PaymentsContent() {
     if (user) load();
   }, [user, load]);
 
-  // Stripe's return_url lands on /dashboard/payments/return, which performs
-  // the authoritative sync. Coming back from there, re-read once so this page
-  // shows the freshly stored status.
-  useEffect(() => {
-    if (!user || searchParams.get('synced') !== '1') return;
-    load().then(() => setToast('Stripe account refreshed.'));
-  }, [user, searchParams, load]);
-
   const showToast = (msg: string) => {
     setToast(msg);
     setTimeout(() => setToast(''), 3000);
-  };
-
-  const connectStripe = async () => {
-    setBusy('stripe');
-    setError('');
-    try {
-      const res = await apiFetch<{ url: string }>('/api/stripe/connect/onboard', { method: 'POST' });
-      window.location.href = res.url;
-    } catch (err) {
-      setError(err instanceof ApiError ? err.message : 'Could not start Stripe onboarding.');
-      setBusy('');
-    }
-  };
-
-  const openStripeDashboard = async () => {
-    setBusy('dashboard');
-    try {
-      const res = await apiFetch<{ url: string }>('/api/stripe/connect/dashboard', { method: 'POST' });
-      window.open(res.url, '_blank', 'noopener');
-    } catch (err) {
-      setError(err instanceof ApiError ? err.message : 'Could not open Stripe.');
-    } finally {
-      setBusy('');
-    }
   };
 
   const addPackage = async (e: React.FormEvent) => {
@@ -189,241 +157,220 @@ function PaymentsContent() {
 
   if (authLoading || loading) {
     return (
-      <div className="min-h-screen bg-[#07070f] flex items-center justify-center">
-        <div className="w-8 h-8 border-2 border-violet-500 border-t-transparent rounded-full animate-spin" />
+      <div className="flex min-h-screen items-center justify-center bg-slate-50">
+        <div className="h-8 w-8 animate-spin rounded-full border-2 border-indigo-600 border-t-transparent" />
       </div>
     );
   }
 
-  // Status is derived from the same rules the server uses, so the UI can't
-  // present an account as ready when Stripe hasn't enabled charges.
-  const status = deriveStripeAccountStatus({
-    stripeAccountId: streamer?.stripeAccountId ?? null,
-    stripeDetailsSubmitted: Boolean(streamer?.stripeDetailsSubmitted),
-    stripeChargesEnabled: Boolean(streamer?.stripeChargesEnabled),
-    stripePayoutsEnabled: Boolean(streamer?.stripePayoutsEnabled),
-  });
-  const copy = statusCopy(status, Boolean(streamer?.stripePayoutsEnabled));
-  const connected = Boolean(streamer?.stripeAccountId);
+  const balance = earnings?.balance ?? null;
   const publicUrl = streamer ? `/streamer/${streamer.slug}` : '';
+  const inputClass = 'min-h-11 w-full rounded-xl border border-slate-300 bg-white px-3.5 py-2.5 text-sm text-slate-900 outline-none transition placeholder:text-slate-400 focus:border-indigo-500 focus:ring-4 focus:ring-indigo-500/10';
 
   return (
-    <div className="min-h-screen bg-[#07070f] text-white">
-      <div className="max-w-5xl mx-auto px-4 py-8 space-y-6">
-        <div className="flex items-center justify-between gap-4 flex-wrap">
+    <div className="min-h-screen bg-slate-50 text-slate-900">
+      <Navbar userName={user?.email?.split('@')[0]} active="payments" />
+      <main className="mx-auto max-w-7xl space-y-6 px-4 py-6 md:px-6 md:py-8">
+        <div className="flex flex-col justify-between gap-4 sm:flex-row sm:items-end">
           <div>
-            <h1 className="text-2xl font-black">Payments</h1>
-            <p className="text-gray-500 text-sm mt-0.5">
-              {streamer?.displayName} · <Link href={publicUrl} className="text-violet-400 hover:text-violet-300">{publicUrl}</Link>
-            </p>
+            <p className="text-sm font-semibold text-indigo-600">Monetisation</p>
+            <h1 className="mt-1 text-2xl font-bold tracking-tight text-slate-950 md:text-3xl">Payments &amp; packages</h1>
+            <p className="mt-2 max-w-2xl text-sm leading-6 text-slate-600">Connect payouts, review your earnings, and control the Mabar packages viewers can purchase.</p>
           </div>
-          <Link href="/dashboard" className="text-sm text-gray-400 hover:text-white transition-colors">
-            ← Dashboard
+          <Link href={publicUrl} target="_blank" className="inline-flex min-h-11 items-center justify-center gap-2 rounded-xl border border-slate-300 bg-white px-4 text-sm font-semibold text-slate-700 shadow-sm transition hover:border-slate-400 hover:bg-slate-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500">
+            View public page <span aria-hidden="true">↗</span>
           </Link>
         </div>
 
         {toast && (
-          <div className="bg-emerald-500/10 border border-emerald-500/20 rounded-xl px-4 py-2.5 text-emerald-400 text-sm">
+          <div role="status" className="rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm font-medium text-emerald-800">
             {toast}
           </div>
         )}
         {error && (
-          <div className="bg-red-500/10 border border-red-500/20 rounded-xl px-4 py-2.5 text-red-400 text-sm">
+          <div role="alert" className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm font-medium text-red-700">
             {error}
           </div>
         )}
 
-        {/* ── Stripe Connect ── */}
-        <section className="bg-[#0f0f1a] border border-white/5 rounded-2xl p-6">
-          <div className="flex items-start justify-between gap-4 flex-wrap">
-            <div>
-              <h2 className="font-bold">Stripe account</h2>
-              <p className="text-gray-500 text-sm mt-1 max-w-lg">{copy.detail}</p>
+        <section className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm shadow-slate-200/50">
+          <div className="flex flex-col justify-between gap-5 p-5 sm:flex-row sm:items-start md:p-6">
+            <div className="flex gap-4">
+              <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-emerald-50 text-emerald-700">
+                <svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" className="h-5 w-5"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="M3 10h18M7 15h3"/></svg>
+              </div>
+              <div>
+                <h2 className="font-semibold text-slate-950">Accepting payments</h2>
+                <p className="mt-1 max-w-2xl text-sm leading-6 text-slate-600">
+                  Your page can take payments right now — you don&apos;t need your own payment
+                  account. Viewers are charged your listed price plus a {earnings?.feeRate ?? ''} service
+                  fee, and you keep your full listed price.
+                </p>
+              </div>
             </div>
-            <span
-              className={`text-xs font-bold px-2.5 py-1 rounded-full shrink-0 ${
-                status === 'active'
-                  ? 'bg-emerald-500/15 text-emerald-400'
-                  : status === 'not_connected'
-                    ? 'bg-white/5 text-gray-400'
-                    : 'bg-amber-500/15 text-amber-400'
-              }`}
-            >
-              {copy.label}
+            <span className="w-fit shrink-0 rounded-full bg-emerald-100 px-3 py-1 text-xs font-semibold text-emerald-700">
+              Live
             </span>
           </div>
 
-          {status === 'active' && (
-            <div className="grid sm:grid-cols-2 gap-3 mt-4">
+          {balance && (
+            <div className="grid gap-3 border-t border-slate-100 bg-slate-50/70 px-5 py-4 sm:grid-cols-3 md:px-6">
               {([
-                ['Payments', Boolean(streamer?.stripeChargesEnabled)],
-                ['Payouts', Boolean(streamer?.stripePayoutsEnabled)],
-              ] as const).map(([label, on]) => (
-                <div key={label} className="flex items-center justify-between bg-[#1a1a2a] rounded-xl px-4 py-2.5">
-                  <span className="text-sm text-gray-400">{label}</span>
-                  <span className={`text-sm font-semibold ${on ? 'text-emerald-400' : 'text-amber-400'}`}>
-                    {on ? 'Enabled' : 'Pending'}
-                  </span>
+                ['Available', balance.availableFormatted],
+                ['Total earned', balance.totalEarnedFormatted],
+                ['Paid out', balance.paidOutFormatted],
+              ] as const).map(([label, value]) => (
+                <div key={label} className="rounded-xl border border-slate-200 bg-white px-4 py-3">
+                  <p className="text-xs font-medium text-slate-500">{label}</p>
+                  <p className="mt-1 text-lg font-bold text-slate-950">{value}</p>
                 </div>
               ))}
             </div>
           )}
 
-          {status === 'onboarding' && (
-            <p className="text-amber-400/80 text-xs mt-3">
-              To accept FPX (Malaysian online banking), Stripe requires a Business Registration
-              Number during verification.
-            </p>
-          )}
-
-          <div className="flex gap-3 mt-4 flex-wrap">
-            {copy.action !== 'none' && (
-              <button
-                onClick={connectStripe}
-                disabled={busy === 'stripe'}
-                className="bg-violet-600 hover:bg-violet-500 disabled:opacity-50 text-white font-bold text-sm px-4 py-2.5 rounded-xl transition-colors"
-              >
-                {busy === 'stripe'
-                  ? 'Opening Stripe...'
-                  : copy.action === 'connect'
-                    ? 'Connect with Stripe'
-                    : 'Continue onboarding'}
-              </button>
-            )}
-            {connected && (
-              <button
-                onClick={openStripeDashboard}
-                disabled={busy === 'dashboard'}
-                className="bg-white/5 hover:bg-white/10 border border-white/10 disabled:opacity-50 text-white font-semibold text-sm px-4 py-2.5 rounded-xl transition-colors"
-              >
-                Open Stripe Dashboard ↗
-              </button>
-            )}
-          </div>
+          <p className="mx-5 mb-5 rounded-xl bg-amber-50 px-4 py-3 text-xs leading-5 text-amber-800 md:mx-6">
+            Withdrawals aren&apos;t open yet — your balance keeps accruing in the meantime. Payout
+            setup arrives once bank transfers are enabled.
+          </p>
         </section>
 
-        {/* ── Earnings ── */}
         {earnings && (
-          <section className="bg-[#0f0f1a] border border-white/5 rounded-2xl p-6">
-            <div className="flex items-center justify-between gap-3 flex-wrap">
-              <h2 className="font-bold">Earnings</h2>
-              <span className="text-xs text-gray-500">Platform fee {earnings.feeRate}</span>
+          <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm shadow-slate-200/50 md:p-6">
+            <div className="flex flex-wrap items-start justify-between gap-3">
+              <div><h2 className="font-semibold text-slate-950">Earnings overview</h2><p className="mt-1 text-sm text-slate-500">What you earned. Viewers pay the service fee on top of your prices.</p></div>
+              <span className="rounded-full bg-slate-100 px-3 py-1 text-xs font-medium text-slate-600">Platform fee {earnings.feeRate}</span>
             </div>
 
-            <div className="grid sm:grid-cols-3 gap-4 mt-4">
+            <div className="mt-5 grid gap-4 sm:grid-cols-3">
               {([
                 ['Today', earnings.today],
                 ['This month', earnings.month],
                 ['All time', earnings.allTime],
               ] as const).map(([label, bucket]) => (
-                <div key={label} className="bg-[#1a1a2a] rounded-xl p-4">
-                  <p className="text-[11px] font-bold text-gray-500 uppercase tracking-widest">{label}</p>
-                  <p className="text-xl font-black mt-1.5">{bucket.grossFormatted}</p>
-                  <p className="text-xs text-gray-500 mt-1">
+                <div key={label} className="rounded-xl border border-slate-200 bg-slate-50/70 p-4">
+                  <p className="text-xs font-semibold uppercase tracking-wider text-slate-500">{label}</p>
+                  <p className="mt-2 text-2xl font-bold tracking-tight text-slate-950">{bucket.earnedFormatted}</p>
+                  <p className="mt-1 text-xs text-slate-500">
                     {bucket.paymentCount} payment{bucket.paymentCount === 1 ? '' : 's'}
                   </p>
-                  <div className="mt-3 pt-3 border-t border-white/5 space-y-1 text-xs">
-                    <div className="flex justify-between text-gray-500">
-                      <span>Platform fee</span><span>−{bucket.platformFeeFormatted}</span>
+                  <div className="mt-4 space-y-2 border-t border-slate-200 pt-3 text-xs">
+                    <div className="flex justify-between text-slate-500">
+                      <span>Service fee (paid by viewer)</span><span>+{bucket.platformFeeFormatted}</span>
                     </div>
-                    <div className="flex justify-between text-gray-300 font-semibold">
-                      <span>Your share</span><span>{bucket.netBeforeProcessingFormatted}</span>
+                    <div className="flex justify-between font-semibold text-slate-800">
+                      <span>Viewers charged</span><span>{bucket.totalChargedFormatted}</span>
                     </div>
                   </div>
                 </div>
               ))}
             </div>
 
-            <p className="text-gray-600 text-xs mt-4">
-              Before Stripe&apos;s processing fee, which Stripe deducts separately. Your Stripe
-              dashboard is the source of truth for settled amounts and payouts.
+            <p className="mt-4 text-xs leading-5 text-slate-500">
+              You keep your full listed price on every sale — the service fee is added on top and
+              paid by the viewer, never deducted from you.
             </p>
           </section>
         )}
 
-        {/* ── Packages ── */}
-        <section className="bg-[#0f0f1a] border border-white/5 rounded-2xl p-6">
-          <h2 className="font-bold">Packages</h2>
-          <p className="text-gray-500 text-sm mt-1">What viewers can buy on your page.</p>
-
-          <div className="mt-4 space-y-2">
+        <section className="grid gap-6 lg:grid-cols-[minmax(0,1.5fr)_minmax(320px,0.75fr)]">
+          <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm shadow-slate-200/50 md:p-6">
+            <div><h2 className="font-semibold text-slate-950">Mabar packages</h2><p className="mt-1 text-sm text-slate-500">Packages currently shown on your public page.</p></div>
+          <div className="mt-5 space-y-3">
             {packages.length === 0 && (
-              <p className="text-gray-600 text-sm py-4 text-center">
+              <div className="rounded-xl border border-dashed border-slate-300 bg-slate-50 px-5 py-10 text-center text-sm text-slate-500">
                 No packages yet — add one below so viewers have something to buy.
-              </p>
+              </div>
             )}
             {packages.map((pkg) => (
               <div
                 key={pkg.packageId}
-                className={`flex items-center gap-3 bg-[#1a1a2a] rounded-xl px-4 py-3 ${pkg.enabled ? '' : 'opacity-50'}`}
+                className="rounded-xl border border-slate-200 bg-white p-4"
               >
-                <div className="flex-1 min-w-0">
-                  <p className="font-semibold text-sm truncate">{pkg.title}</p>
-                  <p className="text-xs text-gray-500 mt-0.5">
+                <div className="flex flex-wrap items-start gap-3">
+                <div className="min-w-0 flex-1">
+                  <div className="flex flex-wrap items-center gap-2"><p className="truncate text-sm font-semibold text-slate-900">{pkg.title}</p><span className={`rounded-full px-2 py-0.5 text-[11px] font-semibold ${pkg.enabled ? 'bg-emerald-100 text-emerald-700' : 'bg-slate-100 text-slate-500'}`}>{pkg.enabled ? 'Active' : 'Hidden'}</span></div>
+                  <p className="mt-1 text-xs text-slate-500">
                     {formatSen(toSen(pkg.priceSen))} · {pkg.games} game{pkg.games === 1 ? '' : 's'}
                   </p>
+                  {pkg.description && <p className="mt-2 text-sm leading-5 text-slate-600">{pkg.description}</p>}
                 </div>
                 <button
+                  type="button"
                   onClick={() => togglePackage(pkg)}
-                  className="text-xs font-semibold px-2.5 py-1.5 rounded-lg bg-white/5 hover:bg-white/10 transition-colors shrink-0"
+                  className="min-h-9 shrink-0 rounded-lg border border-slate-300 px-3 text-xs font-semibold text-slate-700 transition hover:bg-slate-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500"
                 >
                   {pkg.enabled ? 'Disable' : 'Enable'}
                 </button>
                 <button
+                  type="button"
                   onClick={() => removePackage(pkg.packageId)}
-                  className="text-xs font-semibold px-2.5 py-1.5 rounded-lg text-red-400 hover:bg-red-500/10 transition-colors shrink-0"
+                  className="min-h-9 shrink-0 rounded-lg px-3 text-xs font-semibold text-red-600 transition hover:bg-red-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-500"
                 >
                   Remove
                 </button>
+                </div>
               </div>
             ))}
           </div>
+          </div>
 
-          <form onSubmit={addPackage} className="mt-5 pt-5 border-t border-white/5 space-y-3">
-            <div className="grid sm:grid-cols-3 gap-3">
+          <form onSubmit={addPackage} className="h-fit space-y-4 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm shadow-slate-200/50 md:p-6">
+            <div><h2 className="font-semibold text-slate-950">Add a package</h2><p className="mt-1 text-sm leading-5 text-slate-500">Create a clear offer for viewers who want to join your game.</p></div>
+            <div>
+              <label htmlFor="package-title" className="mb-1.5 block text-sm font-medium text-slate-700">Package name</label>
               <input
+                id="package-title"
                 value={title}
                 onChange={(e) => setTitle(e.target.value)}
-                placeholder="3 Games"
+                placeholder="Example: 3 Games"
                 maxLength={100}
-                className="sm:col-span-1 bg-[#1a1a2a] border border-white/5 focus:border-violet-500/50 rounded-xl px-3 py-2.5 text-sm outline-none transition-colors placeholder-gray-600"
+                className={inputClass}
               />
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <div><label htmlFor="package-price" className="mb-1.5 block text-sm font-medium text-slate-700">Price (RM)</label>
               <input
+                id="package-price"
                 value={priceRm}
                 onChange={(e) => setPriceRm(e.target.value)}
-                placeholder="Price (RM)"
+                placeholder="10.00"
                 type="number"
                 min="1"
                 step="0.01"
-                className="bg-[#1a1a2a] border border-white/5 focus:border-violet-500/50 rounded-xl px-3 py-2.5 text-sm outline-none transition-colors placeholder-gray-600"
+                className={inputClass}
               />
+              </div><div><label htmlFor="package-games" className="mb-1.5 block text-sm font-medium text-slate-700">Number of games</label>
               <input
+                id="package-games"
                 value={games}
                 onChange={(e) => setGames(e.target.value)}
-                placeholder="Games"
+                placeholder="3"
                 type="number"
                 min="1"
                 step="1"
-                className="bg-[#1a1a2a] border border-white/5 focus:border-violet-500/50 rounded-xl px-3 py-2.5 text-sm outline-none transition-colors placeholder-gray-600"
+                className={inputClass}
               />
-            </div>
+              </div></div>
+            <div><label htmlFor="package-description" className="mb-1.5 block text-sm font-medium text-slate-700">Description <span className="font-normal text-slate-400">(optional)</span></label>
             <input
+              id="package-description"
               value={description}
               onChange={(e) => setDescription(e.target.value)}
-              placeholder="Optional description"
+              placeholder="What is included in this package?"
               maxLength={500}
-              className="w-full bg-[#1a1a2a] border border-white/5 focus:border-violet-500/50 rounded-xl px-3 py-2.5 text-sm outline-none transition-colors placeholder-gray-600"
+              className={inputClass}
             />
+            </div>
             <button
               type="submit"
               disabled={busy === 'package'}
-              className="bg-violet-600 hover:bg-violet-500 disabled:opacity-50 text-white font-bold text-sm px-4 py-2.5 rounded-xl transition-colors"
+              className="min-h-11 w-full rounded-xl bg-indigo-600 px-4 text-sm font-semibold text-white shadow-sm transition hover:bg-indigo-700 disabled:cursor-not-allowed disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 focus-visible:ring-offset-2"
             >
               {busy === 'package' ? 'Adding...' : 'Add package'}
             </button>
           </form>
         </section>
-      </div>
+      </main>
     </div>
   );
 }
@@ -432,8 +379,8 @@ export default function PaymentsPage() {
   return (
     <Suspense
       fallback={
-        <div className="min-h-screen bg-[#07070f] flex items-center justify-center">
-          <div className="w-8 h-8 border-2 border-violet-500 border-t-transparent rounded-full animate-spin" />
+        <div className="flex min-h-screen items-center justify-center bg-slate-50">
+          <div className="h-8 w-8 animate-spin rounded-full border-2 border-indigo-600 border-t-transparent" />
         </div>
       }
     >

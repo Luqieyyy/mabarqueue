@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { DEFAULT_PLATFORM_FEE_BPS, FEE_TIERS, resolveFeeBps } from './config';
-import { calcPlatformFee, toBps, toSen } from './money';
+import { calcCheckoutAmounts, toBps, toSen } from './money';
 
 describe('resolveFeeBps', () => {
   it('falls back to the platform default when unset', () => {
@@ -33,10 +33,10 @@ describe('fee tiers', () => {
 
   it('computes the documented amounts on an RM20 purchase', () => {
     const gross = toSen(2000);
-    expect(calcPlatformFee(gross, FEE_TIERS.standard).platformFeeSen).toBe(100); // 5%
-    expect(calcPlatformFee(gross, FEE_TIERS.partner).platformFeeSen).toBe(60);   // 3%
-    expect(calcPlatformFee(gross, FEE_TIERS.special).platformFeeSen).toBe(50);   // 2.5%
-    expect(calcPlatformFee(gross, FEE_TIERS.promotional).platformFeeSen).toBe(0);
+    expect(calcCheckoutAmounts(gross, FEE_TIERS.standard).platformFeeSen).toBe(100); // 5%
+    expect(calcCheckoutAmounts(gross, FEE_TIERS.partner).platformFeeSen).toBe(60);   // 3%
+    expect(calcCheckoutAmounts(gross, FEE_TIERS.special).platformFeeSen).toBe(50);   // 2.5%
+    expect(calcCheckoutAmounts(gross, FEE_TIERS.promotional).platformFeeSen).toBe(0);
   });
 
   it('keeps the standard tier at 5%', () => {
@@ -45,21 +45,21 @@ describe('fee tiers', () => {
   });
 });
 
-describe('application fee constraint', () => {
-  it('leaves at least one sen on the charge for Stripe', () => {
-    // Stripe requires application_fee_amount to be strictly less than the
-    // charge; /api/payments/create clamps to gross-1, mirrored here.
-    for (const gross of [100, 399, 1000, 2000]) {
-      const fee = calcPlatformFee(toSen(gross), FEE_TIERS.standard).platformFeeSen;
-      const clamped = Math.min(fee, Math.max(0, gross - 1));
-      expect(clamped).toBeLessThan(gross);
+describe('fee tiers as CHIP line items', () => {
+  it('adds the fee on top so the creator always keeps their listing', () => {
+    // Under CHIP the fee is a separate line item on the purchase, not a
+    // deduction — there is no cap relative to the base price to respect.
+    for (const base of [100, 399, 1000, 2000]) {
+      const a = calcCheckoutAmounts(toSen(base), FEE_TIERS.standard);
+      expect(a.creatorEntitlementSen).toBe(base);
+      expect(a.totalSen).toBe(base + a.platformFeeSen);
     }
   });
 
-  it('clamps a pathological 100% fee below the charge amount', () => {
-    const gross = 2000;
-    const fee = calcPlatformFee(toSen(gross), toBps(10_000)).platformFeeSen;
-    expect(fee).toBe(2000); // the raw fee would consume the whole charge
-    expect(Math.min(fee, gross - 1)).toBe(1999); // clamped, so Stripe accepts it
+  it('handles a 100% rate without ever reducing the entitlement', () => {
+    const a = calcCheckoutAmounts(toSen(2000), toBps(10_000));
+    expect(a.platformFeeSen).toBe(2000);
+    expect(a.creatorEntitlementSen).toBe(2000); // still the full listing
+    expect(a.totalSen).toBe(4000);              // viewer pays double
   });
 });

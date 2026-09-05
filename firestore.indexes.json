@@ -10,18 +10,19 @@
       ]
     },
     {
-      "collectionGroup": "queue",
+      "collectionGroup": "donations",
       "queryScope": "COLLECTION",
       "fields": [
-        { "fieldPath": "username", "order": "ASCENDING" }
+        { "fieldPath": "game", "order": "ASCENDING" },
+        { "fieldPath": "timestamp", "order": "DESCENDING" }
       ]
     },
     {
       "collectionGroup": "donations",
       "queryScope": "COLLECTION",
       "fields": [
-        { "fieldPath": "game", "order": "ASCENDING" },
-        { "fieldPath": "timestamp", "order": "DESCENDING" }
+        { "fieldPath": "status", "order": "ASCENDING" },
+        { "fieldPath": "createdAt", "order": "ASCENDING" }
       ]
     }
   ],
