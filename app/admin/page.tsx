@@ -1,6 +1,7 @@
 'use client';
 
 import Link from 'next/link';
+import Image from 'next/image';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { signOut } from 'firebase/auth';
@@ -144,7 +145,7 @@ export default function AdminPage() {
       <div className="border-b border-white/10 bg-slate-950/90 sticky top-0 z-40 backdrop-blur">
         <div className="max-w-7xl mx-auto px-4 py-4 flex items-center justify-between gap-4">
           <div className="flex items-center gap-3">
-            <div className="w-9 h-9 rounded-lg bg-violet-600 flex items-center justify-center text-sm font-black">M</div>
+            <Image src="/mabarqueue.png" alt="" width={36} height={36} className="w-9 h-9 rounded-lg object-cover" />
             <div>
               <p className="text-sm font-black leading-none">MabarQueue Admin</p>
               <p className="text-xs text-slate-500 mt-1">Platform overview and sales monitoring</p>

@@ -50,9 +50,13 @@ export default function LandingPage() {
             animate={{ opacity: 1, x: 0 }}
             className="flex items-center gap-2"
           >
-            <div className="w-8 h-8 bg-violet-600 rounded-lg flex items-center justify-center text-sm font-black shadow-lg shadow-violet-600/20">
-              M
-            </div>
+            <Image
+              src="/mabarqueue.png"
+              alt=""
+              width={32}
+              height={32}
+              className="w-8 h-8 rounded-lg object-cover shadow-lg shadow-violet-600/20"
+            />
             <span className="font-bold text-white tracking-tight">MabarQueue</span>
           </motion.div>
           <motion.div initial={{ opacity: 0, x: 20 }} animate={{ opacity: 1, x: 0 }}>
@@ -253,7 +257,7 @@ export default function LandingPage() {
         <div className="max-w-6xl mx-auto flex flex-col md:flex-row items-start justify-between gap-10">
           <div className="flex flex-col items-center md:items-start gap-4 max-w-2xl">
             <div className="flex items-center gap-2">
-              <div className="w-6 h-6 bg-violet-600 rounded flex items-center justify-center text-[10px] font-black">M</div>
+              <Image src="/mabarqueue.png" alt="" width={24} height={24} className="w-6 h-6 rounded object-cover" />
               <span className="text-white font-bold text-sm tracking-widest uppercase">MabarQueue</span>
             </div>
             <p className="text-gray-500 text-sm text-center md:text-left max-w-xl">
