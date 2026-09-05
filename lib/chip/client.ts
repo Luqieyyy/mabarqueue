@@ -15,6 +15,12 @@
 
 import 'server-only';
 import { normalisePublicKey } from './signature';
+import {
+  resolveCallbackOrigin as resolveCallbackOriginPure,
+  type CallbackOriginResult,
+} from '../domain/chip-callback';
+
+export type { CallbackOriginResult };
 
 export const CHIP_BASE_URL = 'https://gate.chip-in.asia/api/v1';
 export const CHIP_CURRENCY = 'MYR';
@@ -44,6 +50,17 @@ function credentials(): { secretKey: string; brandId: string } {
 /** True when the configured key is a CHIP test-mode key. */
 export function chipConfigured(): boolean {
   return Boolean(process.env.CHIP_SECRET_KEY && process.env.CHIP_BRAND_ID);
+}
+
+/**
+ * Resolves the origin CHIP's `success_callback` should point at.
+ *
+ * The decision logic is pure and lives in `lib/domain/chip-callback.ts`; this
+ * wrapper just supplies the `CHIP_CALLBACK_ORIGIN` env var, which a client
+ * module (or a test) can't read through `server-only`.
+ */
+export function resolveCallbackOrigin(requestOrigin: string): CallbackOriginResult {
+  return resolveCallbackOriginPure(requestOrigin, process.env.CHIP_CALLBACK_ORIGIN);
 }
 
 async function chipFetch<T>(path: string, init?: RequestInit): Promise<T> {

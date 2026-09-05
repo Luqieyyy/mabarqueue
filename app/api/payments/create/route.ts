@@ -1,5 +1,10 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { ChipError, chipConfigured, createPurchase } from '../../../../lib/chip/client';
+import {
+  ChipError,
+  chipConfigured,
+  createPurchase,
+  resolveCallbackOrigin,
+} from '../../../../lib/chip/client';
 import { getStreamerBySlug } from '../../../../lib/admin/streamers-repo';
 import { getPackage } from '../../../../lib/admin/packages-repo';
 import { resolveCheckoutAmounts, savePaymentAttempt } from '../../../../lib/admin/payments-repo';
@@ -92,6 +97,12 @@ export async function POST(req: NextRequest) {
     const amounts = resolveCheckoutAmounts(basePriceSen, streamer.platformFeeBps);
 
     const origin = req.nextUrl.origin;
+    const callbackOrigin = resolveCallbackOrigin(origin);
+    if (!callbackOrigin.ok) {
+      logEvent('chip_checkout_blocked', { reason: callbackOrigin.reason });
+      return NextResponse.json({ success: false, error: callbackOrigin.message }, { status: 503 });
+    }
+
     const gameDef = getGameDefinition(streamer.activeGame);
     const parsed = kind === 'mabar' ? gameDef.parseMessage(ign) : null;
 
@@ -116,7 +127,7 @@ export async function POST(req: NextRequest) {
       successRedirect: `${origin}/streamer/${streamer.slug}?${kind === 'donation' ? 'donated' : 'paid'}=1`,
       failureRedirect: `${origin}/streamer/${streamer.slug}?failed=1`,
       cancelRedirect: `${origin}/streamer/${streamer.slug}?cancelled=1`,
-      successCallback: `${origin}/api/webhooks/chip`,
+      successCallback: `${callbackOrigin.origin}/api/webhooks/chip`,
       metadata: { streamerId: streamer.streamerId, kind },
     });
 
