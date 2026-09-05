@@ -6,8 +6,10 @@ export interface Donation {
   id: string;
   donorName: string;
   amount: number;
-  ign: string;
+  ign: string | null;
   gamesAdded: number;
+  status?: string;
+  message?: string;
   timestamp: Timestamp | null;
 }
 
@@ -48,11 +50,15 @@ export default function DonationFeed({ donations }: Props) {
                     +RM{d.amount}
                   </span>
                 </div>
-                <p className="text-gray-500 text-xs mt-0.5">
-                  IGN: <span className="text-indigo-600 font-semibold">{d.ign}</span>
-                  <span className="text-gray-300 mx-1">·</span>
-                  {d.gamesAdded} game{d.gamesAdded !== 1 ? 's' : ''} added
-                </p>
+                {d.status === 'donation_only' ? (
+                  <p className="text-gray-500 text-xs mt-0.5">Donation only · not added to queue</p>
+                ) : (
+                  <p className="text-gray-500 text-xs mt-0.5">
+                    IGN: <span className="text-indigo-600 font-semibold">{d.ign || '—'}</span>
+                    <span className="text-gray-300 mx-1">·</span>
+                    {d.gamesAdded} game{d.gamesAdded !== 1 ? 's' : ''} added
+                  </p>
+                )}
               </div>
               <span className="text-gray-400 text-xs shrink-0 ml-2 mt-0.5">{timeAgo(d.timestamp)}</span>
             </div>

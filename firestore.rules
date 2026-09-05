@@ -10,8 +10,8 @@ rules_version = '2';
 // cannot set its own `gamesLeft`, and a viewer cannot read a streamer's
 // Stripe account ID or fee rate.
 //
-// The legacy users/{username}/* block is retained unchanged so the existing
-// dashboard, /queue and /overlay pages keep working during the migration.
+// Legacy dashboard subcollections retain their existing access patterns.
+// User profile creation and identity fields are now server-managed.
 
 service cloud.firestore {
   match /databases/{database}/documents {
@@ -77,15 +77,18 @@ service cloud.firestore {
     }
 
     // ─── Legacy single-tenant schema (users/{emailPrefix}) ──────────────
-    // Unchanged: still used by the current dashboard and public pages until
-    // reads are migrated to streamers/*.
+    // Also used at users/{authUid} for new dashboard accounts.
 
     match /users/{username} {
-      allow create: if request.auth != null
-        && request.resource.data.uid == request.auth.uid;
-
-      allow read, update, delete: if request.auth != null
-        && resource.data.uid == request.auth.uid;
+      // Profiles, roles and workspace pointers are provisioned by the server.
+      allow create, delete: if false;
+      allow read: if request.auth != null
+        && (username == request.auth.uid || resource.data.uid == request.auth.uid);
+      allow update: if request.auth != null
+        && resource.data.uid == request.auth.uid
+        && !request.resource.data.diff(resource.data).affectedKeys().hasAny([
+          'uid', 'authUid', 'role', 'primaryStreamerId', 'legacyUsername', 'email'
+        ]);
 
       match /queue/{docId} {
         allow read: if true;

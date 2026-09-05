@@ -8,8 +8,16 @@ export interface RateTier {
 }
 
 export interface FeatureSettings {
+  mabarQueue: boolean;
+  donations: boolean;
   commentAlbum: boolean;
 }
+
+export const DEFAULT_FEATURES: FeatureSettings = {
+  mabarQueue: true,
+  donations: true,
+  commentAlbum: true,
+};
 
 export interface GameSettings {
   activeGame: GameId;
@@ -39,8 +47,8 @@ export async function saveRates(uid: string, tiers: RateTier[]): Promise<void> {
 
 export async function getFeatures(uid: string): Promise<FeatureSettings> {
   const snap = await getDoc(settingsDoc(uid, 'features'));
-  if (!snap.exists()) return { commentAlbum: false };
-  return snap.data() as FeatureSettings;
+  if (!snap.exists()) return DEFAULT_FEATURES;
+  return { ...DEFAULT_FEATURES, ...snap.data() };
 }
 
 export async function saveFeatures(uid: string, features: FeatureSettings): Promise<void> {

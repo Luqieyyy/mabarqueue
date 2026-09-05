@@ -25,6 +25,7 @@ export class AuthError extends Error {
 export interface AuthenticatedUser {
   uid: AuthUid;
   email: string | null;
+  emailVerified?: boolean;
 }
 
 /**
@@ -47,10 +48,10 @@ export async function requireUser(req: NextRequest): Promise<AuthenticatedUser> 
     // deleted user's still-live token is rejected immediately, not just at
     // its natural expiry.
     const decoded = await adminAuth().verifyIdToken(token, true);
-    return { uid: decoded.uid as AuthUid, email: decoded.email ?? null };
+    return { uid: decoded.uid as AuthUid, email: decoded.email ?? null, emailVerified: decoded.email_verified === true };
   } catch (err) {
     throw new AuthError(
-      err instanceof Error ? `Invalid or expired token: ${err.message}` : 'Invalid or expired token.',
+      'Invalid or expired token.',
     );
   }
 }

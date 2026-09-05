@@ -25,6 +25,7 @@ import {
 } from '../../lib/queue';
 import type { GamePlayer } from '../../lib/queue';
 import { getGameDefinition, DEFAULT_GAME, type GameId } from '../../lib/games';
+import { apiFetch, ApiError } from '../../lib/api-client';
 import Navbar from '../../components/Navbar';
 import CurrentPlayerPanel from '../../components/CurrentPlayerPanel';
 import QueueList from '../../components/QueueList';
@@ -34,6 +35,7 @@ import LivePreview from '../../components/LivePreview';
 import WebhookSettings from '../../components/WebhookSettings';
 import HutangGamePanel from '../../components/HutangGamePanel';
 import CommentAlbumFeed, { type AlbumEntry } from '../../components/CommentAlbumFeed';
+import { DEFAULT_FEATURES, type FeatureSettings } from '../../lib/settings';
 
 export default function DashboardPage() {
   const router = useRouter();
@@ -47,29 +49,57 @@ export default function DashboardPage() {
   const [loading, setLoading] = useState(false);
   const [toast, setToast] = useState('');
   const [showWebhookSettings, setShowWebhookSettings] = useState(false);
-  const [debugJson, setDebugJson] = useState('{\n  "id": "test-001",\n  "amount": 1,\n  "supporter": "TestDonor",\n  "message": "43149159 Luqieyyy",\n  "level": { "title": "PACKAGE MABAR 1 GAME" }\n}');
-  const [debugResponse, setDebugResponse] = useState('');
-  const [debugLoading, setDebugLoading] = useState(false);
   const [firestoreError, setFirestoreError] = useState('');
+  const [workspaceReady, setWorkspaceReady] = useState(false);
+  const [workspaceError, setWorkspaceError] = useState('');
+  const [dashboardKey, setDashboardKey] = useState('');
+  const [bootstrapAttempt, setBootstrapAttempt] = useState(0);
   const [activeGame, setActiveGame] = useState<GameId>(DEFAULT_GAME);
+  const [features, setFeatures] = useState<FeatureSettings>(DEFAULT_FEATURES);
 
   useEffect(() => {
     if (!authLoading && !user) router.push('/login');
   }, [user, authLoading, router]);
 
+  useEffect(() => {
+    if (!user) return;
+    let cancelled = false;
+    setWorkspaceReady(false); setWorkspaceError('');
+    apiFetch<{ streamer: { legacyUsername: string | null; status: string } }>('/api/streamers')
+      .then(({ streamer }) => {
+        if (cancelled) return;
+        if (streamer.status === 'suspended') { setWorkspaceError('This workspace is suspended.'); return; }
+        setDashboardKey(streamer.legacyUsername || username);
+        setWorkspaceReady(true);
+      })
+      .catch((err: unknown) => {
+        if (cancelled) return;
+        if (err instanceof ApiError && err.status === 404) router.replace('/onboarding');
+        else setWorkspaceError(err instanceof Error ? err.message : 'Could not load your workspace.');
+      });
+    return () => { cancelled = true; };
+  }, [user, username, router, bootstrapAttempt]);
+
   // Active game setting — determines which game's queue/donations show below
   useEffect(() => {
-    if (!user || !username) return;
-    const unsub = onSnapshot(doc(db, 'users', username, 'settings', 'game'), (snap) => {
+    if (!user || !dashboardKey || !workspaceReady) return;
+    const unsub = onSnapshot(doc(db, 'users', dashboardKey, 'settings', 'game'), (snap) => {
       const game = (snap.exists() ? (snap.data().activeGame as GameId | undefined) : undefined) ?? DEFAULT_GAME;
       setActiveGame(game);
     });
     return () => unsub();
-  }, [user, username]);
+  }, [user, dashboardKey, workspaceReady]);
 
   useEffect(() => {
-    if (!user || !username) return;
-    const uid = username;
+    if (!user || !dashboardKey || !workspaceReady) return;
+    return onSnapshot(doc(db, 'users', dashboardKey, 'settings', 'features'), (snap) => {
+      setFeatures(snap.exists() ? { ...DEFAULT_FEATURES, ...snap.data() } : DEFAULT_FEATURES);
+    });
+  }, [user, dashboardKey, workspaceReady]);
+
+  useEffect(() => {
+    if (!user || !dashboardKey || !workspaceReady) return;
+    const uid = dashboardKey;
     const queueRef = collection(db, 'users', uid, 'queue');
 
     const onErr = (err: Error) => {
@@ -101,35 +131,19 @@ export default function DashboardPage() {
       query(collection(db, 'users', uid, 'donations'), where('game', '==', activeGame), orderBy('timestamp', 'desc'), limit(20)),
       (snap) => setDonations(snap.docs.map((d) => ({ id: d.id, ...d.data() }) as Donation)),
     );
-    const unsubAlbum = onSnapshot(
-      query(collection(db, 'users', uid, 'comment_album'), orderBy('timestamp', 'desc'), limit(30)),
-      (snap) => setAlbumEntries(snap.docs.map((d) => ({ id: d.id, ...d.data() }) as AlbumEntry)),
-    );
+    const albumEnabled = getGameDefinition(activeGame).capabilities.commentAlbum && features.commentAlbum;
+    if (!albumEnabled) setAlbumEntries([]);
+    const unsubAlbum = albumEnabled
+      ? onSnapshot(
+        query(collection(db, 'users', uid, 'comment_album'), orderBy('timestamp', 'desc'), limit(30)),
+        (snap) => setAlbumEntries(snap.docs.map((d) => ({ id: d.id, ...d.data() }) as AlbumEntry)),
+      )
+      : () => {};
 
     return () => {
       unsubPlaying(); unsubWaiting(); unsubSkipped(); unsubDonations(); unsubAlbum();
     };
-  }, [user, username, activeGame]);
-
-  async function sendDebugWebhook() {
-    if (!user) return;
-    setDebugLoading(true);
-    setDebugResponse('');
-    try {
-      const parsed = JSON.parse(debugJson);
-      const res = await fetch(`/api/sociabuzz/${uid}`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(parsed),
-      });
-      const data = await res.json();
-      setDebugResponse(JSON.stringify(data, null, 2));
-    } catch (err) {
-      setDebugResponse(`Error: ${err instanceof Error ? err.message : String(err)}`);
-    } finally {
-      setDebugLoading(false);
-    }
-  }
+  }, [user, dashboardKey, workspaceReady, activeGame, features.commentAlbum]);
 
   function showToast(msg: string) {
     setToast(msg);
@@ -149,7 +163,9 @@ export default function DashboardPage() {
     }
   }
 
-  if (authLoading || !user) {
+  if (workspaceError) return <main className="min-h-screen bg-slate-100 text-gray-900 p-8"><p role="alert">{workspaceError}</p><button onClick={() => setBootstrapAttempt((n) => n + 1)} className="mt-4 underline">Retry</button></main>;
+
+  if (authLoading || !user || !workspaceReady) {
     return (
       <div className="min-h-screen bg-slate-100 flex items-center justify-center">
         <div className="w-8 h-8 border-2 border-indigo-600 border-t-transparent rounded-full animate-spin" />
@@ -157,8 +173,10 @@ export default function DashboardPage() {
     );
   }
 
-  const uid = username; // Firestore doc ID = email prefix (e.g. "luqmanbahrin2004")
-  const maxSlots = getGameDefinition(activeGame).slotCount;
+  const uid = dashboardKey; // Server-provisioned dashboard data path.
+  const gameDefinition = getGameDefinition(activeGame);
+  const maxSlots = gameDefinition.slotCount;
+  const albumEnabled = gameDefinition.capabilities.commentAlbum && features.commentAlbum;
   const totalPlayers = waitingPlayers.length + currentPlayers.length;
   const totalGames =
     waitingPlayers.reduce((s, p) => s + p.gamesLeft, 0) +
@@ -189,40 +207,44 @@ export default function DashboardPage() {
         </div>
       )}
 
-      <div className="bg-white border-b border-gray-200 px-5 py-2.5 shadow-sm">
-        <div className="max-w-7xl mx-auto flex items-center gap-6 flex-wrap">
-          {[
-            { label: 'Total Players', value: totalPlayers, color: 'text-indigo-600' },
-            { label: 'Games Left', value: totalGames, color: 'text-emerald-600' },
-            { label: 'In Queue', value: waitingPlayers.length, color: 'text-amber-600' },
-            { label: 'Hutang', value: hutangPlayers.length, color: 'text-red-500' },
-            { label: 'Album', value: albumEntries.length, color: 'text-purple-600' },
-          ].map((s) => (
-            <div key={s.label} className="flex items-center gap-2">
-              <span className="text-xs text-gray-500">{s.label}</span>
-              <span className={`text-sm font-bold ${s.color}`}>{s.value}</span>
-            </div>
-          ))}
-          <div className="ml-auto flex items-center gap-2 flex-wrap">
+      <main className="max-w-7xl mx-auto px-4 py-6 md:px-6 md:py-8 space-y-6">
+        <section aria-labelledby="dashboard-title" className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+          <div>
+            <div className="flex items-center gap-2"><h1 id="dashboard-title" className="text-2xl font-bold tracking-tight text-slate-900">{gameDefinition.label} workspace</h1><span className="rounded-full bg-blue-50 px-2 py-1 text-[10px] font-bold text-blue-700">ACTIVE GAME</span></div>
+            <p className="mt-1 text-sm text-slate-500">Manage mabar sessions, donations{albumEnabled ? ', and album comments' : ''} from one place.</p>
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
             {[
-              { label: 'Queue', href: `/queue?uid=${uid}` },
-              { label: 'Overlay', href: `/overlay?uid=${uid}` },
+              { label: 'View public queue', href: `/queue?uid=${encodeURIComponent(uid)}` },
+              { label: 'Open overlay', href: `/overlay?uid=${encodeURIComponent(uid)}` },
             ].map((link) => (
-              <a
-                key={link.label}
-                href={link.href}
-                target="_blank"
-                rel="noreferrer"
-                className="text-[11px] font-semibold text-indigo-600 bg-indigo-50 hover:bg-indigo-100 border border-indigo-200 px-2.5 py-1 rounded-full transition-colors"
-              >
-                {link.label} ↗
+              <a key={link.label} href={link.href} target="_blank" rel="noopener noreferrer"
+                aria-label={`${link.label} (opens in a new tab)`}
+                className="inline-flex min-h-11 items-center justify-center gap-2 rounded-xl border border-slate-200 bg-white px-3 text-sm font-medium text-slate-600 transition-colors hover:border-indigo-200 hover:bg-indigo-50 hover:text-indigo-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500">
+                {link.label}
+                <svg aria-hidden="true" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.5" className="h-3.5 w-3.5 shrink-0"><path d="M6 14 14 6M6 6h8v8" /></svg>
               </a>
             ))}
           </div>
-        </div>
-      </div>
+        </section>
 
-      <div className="max-w-7xl mx-auto p-4 md:p-6 space-y-4">
+        <section aria-label="Queue overview" className="rounded-2xl border border-slate-200 bg-white p-2">
+          <dl className="grid grid-cols-2 gap-1 sm:grid-cols-3 lg:grid-cols-5">
+            {[
+              { label: 'Total players', value: totalPlayers, color: 'text-slate-900' },
+              { label: 'Games remaining', value: totalGames, color: 'text-indigo-600' },
+              { label: 'Waiting', value: waitingPlayers.length, color: 'text-amber-600' },
+              { label: 'Hutang', value: hutangPlayers.length, color: 'text-rose-600' },
+              ...(albumEnabled ? [{ label: 'Album comments', value: albumEntries.length, color: 'text-slate-600' }] : []),
+            ].map((stat) => (
+              <div key={stat.label} className="rounded-xl px-3 py-3 md:px-4">
+                <dt className="text-xs font-medium text-slate-500">{stat.label}</dt>
+                <dd className={`mt-1 text-2xl font-semibold tabular-nums tracking-tight ${stat.color}`}>{stat.value}</dd>
+              </div>
+            ))}
+          </dl>
+        </section>
+
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
           <CurrentPlayerPanel
             players={currentPlayers}
@@ -276,33 +298,9 @@ export default function DashboardPage() {
           <DonationFeed donations={donations} />
         </div>
 
-        <CommentAlbumFeed entries={albumEntries} />
-        <LivePreview currentPlayers={currentPlayers} queue={waitingPlayers} albumEntries={albumEntries} maxSlots={maxSlots} />
-
-        {/* DEBUG */}
-        <div className="bg-yellow-50 border border-yellow-300 rounded-2xl p-4 space-y-3">
-          <div className="flex items-center gap-2">
-            <span className="text-xs font-bold text-yellow-700 uppercase tracking-widest">Debug — Webhook Tester</span>
-            <span className="text-xs text-yellow-600 bg-yellow-100 px-2 py-0.5 rounded-full">Sementara je</span>
-          </div>
-          <p className="text-[11px] text-yellow-700 font-mono">POST /api/sociabuzz/<span className="font-bold">{uid}</span></p>
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
-            <div className="space-y-2">
-              <label className="text-xs text-yellow-700 font-medium">JSON Payload</label>
-              <textarea value={debugJson} onChange={(e) => setDebugJson(e.target.value)} rows={8} className="w-full font-mono text-xs bg-white border border-yellow-200 rounded-lg p-3 focus:outline-none focus:ring-2 focus:ring-yellow-400 resize-none" spellCheck={false} />
-              <button onClick={sendDebugWebhook} disabled={debugLoading} className="w-full bg-yellow-500 hover:bg-yellow-600 disabled:opacity-50 text-white text-sm font-semibold py-2 rounded-lg transition-colors">
-                {debugLoading ? 'Sending...' : `Send to /api/sociabuzz/${uid}`}
-              </button>
-            </div>
-            <div className="space-y-2">
-              <label className="text-xs text-yellow-700 font-medium">Response</label>
-              <pre className="w-full h-[calc(100%-2rem)] min-h-[8rem] font-mono text-xs bg-white border border-yellow-200 rounded-lg p-3 overflow-auto whitespace-pre-wrap break-all text-gray-700">
-                {debugResponse || '— tekan Send untuk tengok response —'}
-              </pre>
-            </div>
-          </div>
-        </div>
-      </div>
+        {albumEnabled && <CommentAlbumFeed entries={albumEntries} />}
+        <LivePreview currentPlayers={currentPlayers} queue={waitingPlayers} albumEntries={albumEnabled ? albumEntries : []} maxSlots={maxSlots} />
+      </main>
     </div>
   );
 }

@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { useParams } from 'next/navigation';
 import { publicFetch } from '../../../lib/api-client';
 
@@ -23,6 +23,7 @@ interface PublicPageData {
   playing: PublicQueueEntry[];
   waiting: PublicQueueEntry[];
   hutang: PublicQueueEntry[];
+  donationAlert: { id: string; donorName: string; amountSen: number; message: string | null; createdAtMs: number } | null;
 }
 
 const GRID_COLUMNS = '70px 1fr 60px 80px 60px';
@@ -31,12 +32,23 @@ export default function OverlaySlugPage() {
   const params = useParams<{ slug: string }>();
   const slug = typeof params?.slug === 'string' ? params.slug : '';
   const [data, setData] = useState<PublicPageData | null>(null);
+  const [visibleAlert, setVisibleAlert] = useState<PublicPageData['donationAlert']>(null);
+  const lastAlertId = useRef<string | null>(null);
+  const initialized = useRef(false);
 
   const load = useCallback(async () => {
     if (!slug) return;
     try {
       const res = await publicFetch<PublicPageData>(`/api/public/${encodeURIComponent(slug)}`);
       setData(res);
+      if (!initialized.current) {
+        initialized.current = true;
+        lastAlertId.current = res.donationAlert?.id ?? null;
+      } else if (res.donationAlert && res.donationAlert.id !== lastAlertId.current) {
+        lastAlertId.current = res.donationAlert.id;
+        setVisibleAlert(res.donationAlert);
+        window.setTimeout(() => setVisibleAlert((current) => current?.id === res.donationAlert?.id ? null : current), 8000);
+      }
     } catch {
       // Keep the last good frame rather than flashing an error on stream.
     }
@@ -51,7 +63,7 @@ export default function OverlaySlugPage() {
   if (!data) return null;
 
   const { playing, waiting, game } = data;
-  if (playing.length === 0 && waiting.length === 0) return null;
+  if (playing.length === 0 && waiting.length === 0 && !visibleAlert) return null;
 
   const maxSlots = game.slotCount;
   const nextTurn = waiting.slice(0, maxSlots);
@@ -67,7 +79,14 @@ export default function OverlaySlugPage() {
         userSelect: 'none',
       }}
     >
-      <div
+      {visibleAlert && (
+        <div style={{ marginBottom: '12px', borderRadius: '14px', border: '1px solid rgba(37,99,235,.28)', background: 'rgba(255,255,255,.97)', padding: '16px 18px', boxShadow: '0 12px 35px rgba(15,23,42,.18)', animation: 'fadeSlideIn .22s ease-out' }}>
+          <div style={{ fontSize: '10px', fontWeight: 800, color: '#2563eb', letterSpacing: '.12em', textTransform: 'uppercase' }}>New donation</div>
+          <div style={{ marginTop: '5px', fontSize: '19px', fontWeight: 800, color: '#0f172a' }}>{visibleAlert.donorName} · RM{(visibleAlert.amountSen / 100).toFixed(2)}</div>
+          {visibleAlert.message && <div style={{ marginTop: '5px', fontSize: '13px', lineHeight: 1.45, color: '#475569' }}>{visibleAlert.message}</div>}
+        </div>
+      )}
+      {(playing.length > 0 || waiting.length > 0) && <div
         style={{
           background: '#ffffff',
           border: '2px solid #cccccc',
@@ -177,7 +196,7 @@ export default function OverlaySlugPage() {
             +{waiting.length - maxSlots - MAX_QUEUE_ROWS} more in queue
           </div>
         )}
-      </div>
+      </div>}
     </div>
   );
 }

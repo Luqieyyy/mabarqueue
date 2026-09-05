@@ -206,15 +206,17 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ uid
     // Parse player ID + IGN from message, using this streamer's active game's parser
     const parsed = gameDef.parseMessage(message);
     if (!parsed || !parsed.player_id) {
-      console.warn(`[Sociabuzz/${uid}] ✗ No ${gameDef.idLabel} in message: "${message}"`);
+      // A support/donation without valid mabar player details is still a
+      // successful donation. It is logged for alerts and reporting but must
+      // never create or update a queue entry.
+      console.log(`[Sociabuzz/${uid}] ✓ Donation only — no queue entry requested`);
       await logDonation(uid, {
         donorName, amount, ign: null, playerId: null, gamesAdded: 0,
         message, transactionId, packageTitle: levelTitle,
-        status: 'failed_parse', game: activeGame,
+        status: 'donation_only', game: activeGame,
       });
       return NextResponse.json({
-        success: true,
-        warning: `No ${gameDef.idLabel} found in message "${message}"`,
+        success: true, type: 'donation', queued: false,
       });
     }
 

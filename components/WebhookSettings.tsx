@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import {
   DEFAULT_TIERS,
+  DEFAULT_FEATURES,
   getRates,
   saveRates,
   getFeatures,
@@ -21,7 +22,7 @@ import {
   type StreamerPackage,
 } from '../lib/packages';
 import { getActiveGame, saveActiveGame } from '../lib/settings';
-import { GAMES, DEFAULT_GAME, type GameId, type GameDefinition } from '../lib/games';
+import { GAMES, DEFAULT_GAME, type GameId } from '../lib/games';
 
 interface Props {
   uid: string;
@@ -56,7 +57,7 @@ export default function WebhookSettings({ uid, isOpen, onClose }: Props) {
   const [confirmDelete, setConfirmDelete] = useState<string | null>(null);
 
   // ── Features tab state ──
-  const [features, setFeatures] = useState<FeatureSettings>({ commentAlbum: false });
+  const [features, setFeatures] = useState<FeatureSettings>(DEFAULT_FEATURES);
   const [savingFeatures, setSavingFeatures] = useState(false);
   const [savedFeatures, setSavedFeatures] = useState(false);
   const [activeGame, setActiveGame] = useState<GameId>(DEFAULT_GAME);
@@ -250,15 +251,17 @@ export default function WebhookSettings({ uid, isOpen, onClose }: Props) {
 
               <div className="space-y-2">
                 {Object.values(GAMES)
-                  .filter((g): g is GameDefinition => !!g)
                   .map((g) => (
                     <button
                       key={g.id}
-                      onClick={() => setActiveGame(g.id)}
+                      onClick={() => g.availability === 'available' && setActiveGame(g.id)}
+                      disabled={g.availability !== 'available'}
                       className={`w-full flex items-center justify-between border rounded-xl px-4 py-3 transition-all text-left ${
                         activeGame === g.id
                           ? 'bg-indigo-50 border-indigo-300'
-                          : 'bg-white border-gray-200 hover:border-gray-300'
+                          : g.availability === 'available'
+                            ? 'bg-white border-gray-200 hover:border-gray-300'
+                            : 'cursor-not-allowed bg-gray-50 border-gray-200 opacity-60'
                       }`}
                     >
                       <div>
@@ -267,6 +270,7 @@ export default function WebhookSettings({ uid, isOpen, onClose }: Props) {
                         </p>
                         <p className="text-xs text-gray-400 mt-0.5">{g.slotCount} viewer slots · {g.idLabel}</p>
                       </div>
+                      {g.availability === 'coming-soon' && <span className="rounded-full bg-gray-200 px-2 py-1 text-[10px] font-bold text-gray-500">COMING SOON</span>}
                       {activeGame === g.id && (
                         <span className="w-5 h-5 rounded-full bg-indigo-600 flex items-center justify-center text-white text-xs shrink-0">
                           ✓

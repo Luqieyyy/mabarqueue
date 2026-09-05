@@ -1,6 +1,6 @@
 'use client';
 
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { signOut } from 'firebase/auth';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
@@ -10,13 +10,36 @@ import { auth } from '../lib/firebase';
 interface Props {
   userName?: string;
   onSettings?: () => void;
+  active?: 'dashboard' | 'payments';
 }
 
-export default function Navbar({ userName, onSettings }: Props) {
+export default function Navbar({ userName, onSettings, active = 'dashboard' }: Props) {
   const router = useRouter();
-  const menu = useRef<HTMLDetailsElement>(null);
+  const containerRef = useRef<HTMLDivElement>(null);
+  const [menuOpen, setMenuOpen] = useState(false);
   const [signingOut, setSigningOut] = useState(false);
   const [error, setError] = useState('');
+
+  // Explicit state + a document listener, rather than <details>/onBlur:
+  // Safari doesn't focus a <button> on click (only Chrome/Firefox do), so a
+  // blur-based close race would fire before the button's own onClick ran,
+  // silently swallowing every click inside the menu. mousedown + a real
+  // "did the click land outside" check has no such race, in any browser.
+  useEffect(() => {
+    if (!menuOpen) return;
+    function handlePointerDown(event: MouseEvent) {
+      if (!containerRef.current?.contains(event.target as Node)) setMenuOpen(false);
+    }
+    function handleKeyDown(event: KeyboardEvent) {
+      if (event.key === 'Escape') setMenuOpen(false);
+    }
+    document.addEventListener('mousedown', handlePointerDown);
+    document.addEventListener('keydown', handleKeyDown);
+    return () => {
+      document.removeEventListener('mousedown', handlePointerDown);
+      document.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [menuOpen]);
 
   async function handleLogout() {
     if (signingOut) return;
@@ -36,33 +59,64 @@ export default function Navbar({ userName, onSettings }: Props) {
         </Link>
 
         <div className="flex items-center gap-1 sm:ml-6 sm:mr-auto">
-          <Link href="/dashboard" aria-current="page" className={`${linkClass} bg-indigo-50 text-indigo-700`}>Dashboard</Link>
-          <Link href="/dashboard/payments" className={`${linkClass} text-slate-500 hover:bg-slate-50 hover:text-slate-900`}>Payments</Link>
+          <Link
+            href="/dashboard"
+            aria-current={active === 'dashboard' ? 'page' : undefined}
+            className={`${linkClass} ${active === 'dashboard' ? 'bg-indigo-50 text-indigo-700' : 'text-slate-500 hover:bg-slate-50 hover:text-slate-900'}`}
+          >
+            Dashboard
+          </Link>
+          <Link
+            href="/dashboard/payments"
+            aria-current={active === 'payments' ? 'page' : undefined}
+            className={`${linkClass} ${active === 'payments' ? 'bg-indigo-50 text-indigo-700' : 'text-slate-500 hover:bg-slate-50 hover:text-slate-900'}`}
+          >
+            Payments
+          </Link>
         </div>
 
-        <details ref={menu} className="relative shrink-0" onBlur={(event) => {
-          if (!event.currentTarget.contains(event.relatedTarget as Node | null)) event.currentTarget.open = false;
-        }} onKeyDown={(event) => {
-          if (event.key === 'Escape' && menu.current) {
-            menu.current.open = false;
-            menu.current.querySelector('summary')?.focus();
-          }
-        }}>
-          <summary aria-label="Account menu" className="flex min-h-11 cursor-pointer list-none items-center gap-2 rounded-xl px-2 text-slate-600 transition-colors hover:bg-slate-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 [&::-webkit-details-marker]:hidden">
+        <div ref={containerRef} className="relative shrink-0">
+          <button
+            type="button"
+            aria-label="Account menu"
+            aria-haspopup="menu"
+            aria-expanded={menuOpen}
+            onClick={() => setMenuOpen((open) => !open)}
+            className="flex min-h-11 cursor-pointer items-center gap-2 rounded-xl px-2 text-slate-600 transition-colors hover:bg-slate-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500"
+          >
             <span className="flex h-8 w-8 items-center justify-center rounded-full bg-slate-100 text-xs font-bold text-slate-600">{userName?.charAt(0).toUpperCase() || 'M'}</span>
             <span className="hidden max-w-32 truncate text-sm font-medium md:block">{userName || 'My account'}</span>
             <svg aria-hidden="true" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.5" className="hidden h-4 w-4 sm:block"><path d="m6 8 4 4 4-4" /></svg>
-          </summary>
-          <div className="absolute right-0 top-full mt-2 w-60 rounded-2xl border border-slate-200 bg-white p-2 shadow-xl shadow-slate-900/10">
-            <div className="border-b border-slate-100 px-3 py-3">
-              <p className="text-xs text-slate-400">Creator account</p>
-              <p className="mt-1 truncate text-sm font-semibold text-slate-900">{userName || 'My account'}</p>
+          </button>
+          {menuOpen && (
+            <div role="menu" className="absolute right-0 top-full mt-2 w-60 rounded-2xl border border-slate-200 bg-white p-2 shadow-xl shadow-slate-900/10">
+              <div className="border-b border-slate-100 px-3 py-3">
+                <p className="text-xs text-slate-400">Creator account</p>
+                <p className="mt-1 truncate text-sm font-semibold text-slate-900">{userName || 'My account'}</p>
+              </div>
+              {onSettings && (
+                <button
+                  type="button"
+                  role="menuitem"
+                  onClick={() => { setMenuOpen(false); onSettings(); }}
+                  className="mt-1 w-full rounded-lg px-3 py-3 text-left text-sm text-slate-600 hover:bg-slate-50 focus-visible:ring-2 focus-visible:ring-indigo-500"
+                >
+                  Webhook settings
+                </button>
+              )}
+              <button
+                type="button"
+                role="menuitem"
+                onClick={() => { setMenuOpen(false); handleLogout(); }}
+                disabled={signingOut}
+                className="w-full rounded-lg px-3 py-3 text-left text-sm text-red-600 hover:bg-red-50 disabled:opacity-50 focus-visible:ring-2 focus-visible:ring-indigo-500"
+              >
+                {signingOut ? 'Signing out…' : 'Sign out'}
+              </button>
+              {error && <p role="alert" className="px-3 py-2 text-xs text-red-600">{error}</p>}
             </div>
-            {onSettings && <button type="button" onClick={() => { if (menu.current) menu.current.open = false; onSettings(); }} className="mt-1 w-full rounded-lg px-3 py-3 text-left text-sm text-slate-600 hover:bg-slate-50 focus-visible:ring-2 focus-visible:ring-indigo-500">Webhook settings</button>}
-            <button type="button" onClick={handleLogout} disabled={signingOut} className="w-full rounded-lg px-3 py-3 text-left text-sm text-red-600 hover:bg-red-50 disabled:opacity-50 focus-visible:ring-2 focus-visible:ring-indigo-500">{signingOut ? 'Signing out…' : 'Sign out'}</button>
-            {error && <p role="alert" className="px-3 py-2 text-xs text-red-600">{error}</p>}
-          </div>
-        </details>
+          )}
+        </div>
       </nav>
     </header>
   );

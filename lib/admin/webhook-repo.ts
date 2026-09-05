@@ -76,10 +76,14 @@ export async function getRates(uid: string): Promise<RateTier[]> {
   return (snap.data()?.tiers as RateTier[] | undefined) ?? DEFAULT_TIERS;
 }
 
-export async function getFeatures(uid: string): Promise<{ commentAlbum: boolean }> {
+export async function getFeatures(uid: string): Promise<{ mabarQueue: boolean; donations: boolean; commentAlbum: boolean }> {
   const snap = await settingsDoc(uid, 'features').get();
-  if (!snap.exists) return { commentAlbum: false };
-  return { commentAlbum: Boolean(snap.data()?.commentAlbum) };
+  if (!snap.exists) return { mabarQueue: true, donations: true, commentAlbum: true };
+  return {
+    mabarQueue: snap.data()?.mabarQueue !== false,
+    donations: snap.data()?.donations !== false,
+    commentAlbum: snap.data()?.commentAlbum !== false,
+  };
 }
 
 export async function getActiveGame(uid: string): Promise<GameId> {
@@ -141,6 +145,7 @@ export async function ensurePackageExists(
 
 export type DonationStatus =
   | 'success'
+  | 'donation_only'
   | 'failed_parse'
   | 'package_disabled'
   | 'no_games'
@@ -175,6 +180,27 @@ export async function logDonation(uid: string, input: DonationLogInput): Promise
     game: input.game,
     timestamp: FieldValue.serverTimestamp(),
   });
+}
+
+/** Stream-safe donation alert from the legacy Sociabuzz storage path. */
+export async function getLatestLegacyDonationAlert(uid: string): Promise<{
+  id: string;
+  donorName: string;
+  amountSen: number;
+  message: string | null;
+  createdAtMs: number;
+} | null> {
+  const snap = await userDoc(uid).collection('donations').orderBy('timestamp', 'desc').limit(10).get();
+  const donation = snap.docs.find((doc) => doc.data().status === 'donation_only');
+  if (!donation) return null;
+  const data = donation.data();
+  return {
+    id: `sociabuzz-${donation.id}`,
+    donorName: String(data.donorName || 'Anonymous supporter'),
+    amountSen: Math.max(0, Math.round(Number(data.amount || 0) * 100)),
+    message: typeof data.message === 'string' && data.message.trim() ? data.message.trim().slice(0, 240) : null,
+    createdAtMs: typeof data.timestamp?.toMillis === 'function' ? data.timestamp.toMillis() : 0,
+  };
 }
 
 export async function logAlbumComment(

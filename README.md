@@ -1,5 +1,9 @@
 # MabarQueue
 
+Development handover notes are indexed in [docs/README.md](docs/README.md).
+
+Creator registration now uses `/register` → email verification → `/onboarding` → dashboard. See [Creator signup](CREATOR_SIGNUP.md) for the current account model, required Firebase configuration, rule deployment and verification notes. Older architecture examples below describe the legacy queue implementation.
+
 **Automated live mabar queue management system for streamers.**
 Viewers donate via Sociabuzz → auto-join the game queue → streamer presses Finish Game → deducts games automatically.
 
